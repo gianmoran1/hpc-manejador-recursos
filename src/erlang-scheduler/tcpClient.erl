@@ -69,6 +69,7 @@ recibirRespuesta(Socket, PidScheduler) ->
       Tokens = string:tokens(StringRecibido, " \n"),
       Resultado = procesarMensaje(Tokens),
       PidScheduler ! Resultado, % Al scheduler le enviamos el resultado
+      recibirRespuesta(Socket, PidScheduler);
     {error, Reason} ->
       PidScheduler ! {errorRecv, Reason}
   end.
