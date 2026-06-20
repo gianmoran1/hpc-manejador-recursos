@@ -49,8 +49,6 @@ int set_nonblocking(int fd) {
 
 // Funcion que crea mi socket de escucha TCP, tanto local para el erlang como
 // global para cualquier otro agente C
-// is_local = 1 (Escucha solo a Erlang en 127.0.0.1)
-// is_local = 0 (Escucha a otros Nodos C en la IP pública)
 int mk_tcp_server(int port, const char* ip) {
 
 	/* Crear socket */
@@ -90,6 +88,9 @@ int mk_udp_server(int port) {
     if (setsockopt(usock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes) < 0)
         quit("setsockopt UDP");
 
+    int broadcast_enable = 1;
+    setsockopt(usock, SOL_SOCKET, SO_BROADCAST, &broadcast_enable, sizeof(broadcast_enable));
+
     struct sockaddr_in sa;
     sa.sin_family = AF_INET;
     sa.sin_port = htons(port);
@@ -101,4 +102,20 @@ int mk_udp_server(int port) {
     set_nonblocking(usock);
 
     return usock;
+}
+
+// Crea un temporizador que "dispara" cada X segundos
+int mk_timer(int segundos) {
+    int tfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
+    if (tfd == -1) quit("timerfd_create");
+
+    struct itimerspec ts;
+    ts.it_value.tv_sec = segundos;      // Primer disparo en X segundos
+    ts.it_value.tv_nsec = 0;
+    ts.it_interval.tv_sec = segundos;   // Repetir cada X segundos
+    ts.it_interval.tv_nsec = 0;
+    
+    if (timerfd_settime(tfd, 0, &ts, NULL) == -1) quit("timerfd_settime");
+
+    return tfd;
 }
