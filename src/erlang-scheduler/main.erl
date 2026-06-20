@@ -2,6 +2,7 @@
 -export([iniciarSistema/0]).
 
 iniciarSistema() ->
+  spawn(logger, iniciar, ["scheduler.log"]),
   case tcpClient:empezarConexion("127.0.0.1", 8080) of
     {okConnect, Socket} ->
       PidScheduler = spawn(scheduler, iniciarScheduler, [Socket]),
