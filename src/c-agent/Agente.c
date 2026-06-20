@@ -29,10 +29,6 @@
  * Simulando el cliente de erlang por nc localhost <puerto>
  * Simulando otro nodo C por nc <ip_local> <puerto>
  * Simulando un ANNOUNCE por echo "ANNOUNCE 192.168.
-
-
-
-
   */
 
 
@@ -68,9 +64,6 @@ void parsear_mensaje_red_c(int fd, char* msg) {
     // Imprime en Cian
     printf("\033[0;36m   [MOCK RED C] Mensaje completo extraído: '%s'\033[0m\n", msg);
 }
-
-
-
 
 
 
