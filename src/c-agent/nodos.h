@@ -25,9 +25,6 @@ Nodo crear_nodo(char* ip, int puerto, int cpu, int gpu, int mem);
 
 void agregar_nodo(Nodo, TablaNodos);
 
-
-void limpiar_nodos(TablaNodos);
-
 void reiniciar_timestamp(char* ip, TablaNodos);
 
 TablaNodos crear_tabla_nodos();

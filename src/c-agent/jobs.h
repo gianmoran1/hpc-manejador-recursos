@@ -23,7 +23,7 @@ TablaJobs crear_tabla_jobs();
 void destruir_tabla_jobs(TablaJobs tabla_jobs);
 
 void registrar_asignacion(TablaJobs tabla_jobs, int job_id, int socket, char* recurso, int cantidad);
-void registrar_liberacion(TablaJobs tabla_jobs, int job_id, char* recurso, int cantidad);
+int registrar_liberacion(TablaJobs tabla_jobs, int job_id, char* recurso, int cantidad);
 void liberar_recursos_socket(TablaJobs tabla_jobs, int socket_caido, void (*liberar_recurso_cb)(char*, int));
 
 #endif /* __JOBS_H__ */

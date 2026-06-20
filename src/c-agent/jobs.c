@@ -65,40 +65,52 @@ void registrar_asignacion(TablaJobs tabla_jobs, int job_id, int socket, char* re
     else if (strcmp(recurso, "mem") == 0) job->mem_usada += cantidad;
 }
 
-void registrar_liberacion(TablaJobs tabla_jobs, int job_id, char* recurso, int cantidad) {
+// jobs.c
+int registrar_liberacion(TablaJobs tabla_jobs, int job_id, char* recurso, int cantidad) {
     struct jobActivo_ busqueda;
     busqueda.job_id = job_id;
 
     JobActivo job = (JobActivo)tablahash_buscar(tabla_jobs->tabla, &busqueda);
-    if (job == NULL) return; // Escudo por si mandan un RELEASE de algo inexistente
+    if (job == NULL) return 0; // No existe el job
 
-    if (strcmp(recurso, "cpu") == 0) job->cpu_usada -= cantidad;
-    else if (strcmp(recurso, "gpu") == 0) job->gpu_usada -= cantidad;
-    else if (strcmp(recurso, "mem") == 0) job->mem_usada -= cantidad;
+    int liberado = 0;
+    if (strcmp(recurso, "cpu") == 0) {
+        liberado = (cantidad > job->cpu_usada) ? job->cpu_usada : cantidad;
+        job->cpu_usada -= liberado;
+    } else if (strcmp(recurso, "gpu") == 0) {
+        liberado = (cantidad > job->gpu_usada) ? job->gpu_usada : cantidad;
+        job->gpu_usada -= liberado;
+    } else if (strcmp(recurso, "mem") == 0) {
+        liberado = (cantidad > job->mem_usada) ? job->mem_usada : cantidad;
+        job->mem_usada -= liberado;
+    } else {
+        return 0;
+    }
 
-    // Si el trabajo ya pagó todas sus deudas, lo borramos por completo
+    // Si el trabajo quedó sin deudas, eliminarlo
     if (job->cpu_usada == 0 && job->gpu_usada == 0 && job->mem_usada == 0) {
         tablahash_eliminar(tabla_jobs->tabla, job);
-
-        // Lo desvinculamos de tu lista iteradora (Estilo C clásico)
-        GList temp = tabla_jobs->lista;
-        if (temp != NULL) {
-            if (temp->data == job) {
-                tabla_jobs->lista = temp->next;
-                free(temp);
-            } else {
-                while (temp->next != NULL && temp->next->data != job) {
-                    temp = temp->next;
+        // ... (código existente para eliminar de la lista)
+                GList temp = tabla_jobs->lista;
+                if (temp != NULL) {
+                    if (temp->data == job) {
+                        tabla_jobs->lista = temp->next;
+                        free(temp);
+                    } else {
+                        while (temp->next != NULL && temp->next->data != job) {
+                            temp = temp->next;
+                        }
+                        if (temp->next != NULL) {
+                            GList borrar = temp->next;
+                            temp->next = temp->next->next;
+                            free(borrar);
+                        }
+                    }
                 }
-                if (temp->next != NULL) {
-                    GList borrar = temp->next;
-                    temp->next = temp->next->next;
-                    free(borrar);
-                }
-            }
-        }
     }
+    return liberado;
 }
+
 
 // NUESTRO ESCUDO CONTRA TRAGEDIAS
 // Recorre la lista y, si el socket coincide, devuelve los recursos mediante el callback

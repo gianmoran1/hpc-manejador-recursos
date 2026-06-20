@@ -2,26 +2,20 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
 
-// Variables estáticas para pasar contexto al callback ciego.
-// ¡Esto es seguro únicamente porque el epoll atiende eventos de a uno por vez!
-//en caso de hacer hilos, hay que implementar un mecanismo de sincronización para que no se pisen entre sí.
-static EstadoGlobal estado_actual = NULL;
-static FuncionAviso aviso_red_actual = NULL;
+#define TIEMPO_ESPERA 30.0
 
-/* * El Traductor: Recibe la orden de jobs.c ("cpu", 2) y la redirige a recursos.c
- */
-static void callback_tragedia(char* nombre_recurso, int cantidad) {
-    if (strcmp(nombre_recurso, "cpu") == 0) {
-        manejar_release(estado_actual->cpu, cantidad, aviso_red_actual);
-    } else if (strcmp(nombre_recurso, "gpu") == 0) {
-        manejar_release(estado_actual->gpu, cantidad, aviso_red_actual);
-    } else if (strcmp(nombre_recurso, "mem") == 0) {
-        manejar_release(estado_actual->mem, cantidad, aviso_red_actual);
-    }
+// Helpers de memoria para la Cola
+static void* no_copia_solicitud(void* dato) { return dato; }
+static void destruir_solicitud(void* dato) { free(dato); }
+
+static RecursoLocal obtener_recurso(EstadoGlobal estado, char* nombre) {
+    if (strcmp(nombre, "cpu") == 0) return estado->cpu;
+    if (strcmp(nombre, "gpu") == 0) return estado->gpu;
+    if (strcmp(nombre, "mem") == 0) return estado->mem;
+    return NULL;
 }
-
-// -----------------------------------------------------------------------------
 
 EstadoGlobal estado_crear(int cap_cpu, int cap_gpu, int cap_mem) {
     EstadoGlobal e = malloc(sizeof(struct estadoGlobal_));
@@ -40,20 +34,122 @@ void estado_destruir(EstadoGlobal estado) {
     free(estado);
 }
 
-void manejar_desconexion_socket(EstadoGlobal estado, int socket_caido, FuncionAviso avisar_red) {
-    // 1. Preparamos el escenario para la traducción
+// -----------------------------------------------------------------------------
+// OPERACIONES MAESTRAS
+// -----------------------------------------------------------------------------
+
+int gestor_manejar_reserva(EstadoGlobal estado, char* nombre_recurso, int job_id, int socket_origen, int cantidad) {
+    RecursoLocal rec = obtener_recurso(estado, nombre_recurso);
+    if (!rec) return -1;
+
+    // Escudo contra el campesino iluso
+    if (cantidad > rec->capacidad_total) return -1;
+
+    if (cantidad <= 0) return -1; 
+
+    if (rec->disponible >= cantidad && cola_es_vacia(rec->pendientes)) {
+        rec->disponible -= cantidad;
+        registrar_asignacion(estado->libro_contable, job_id, socket_origen, nombre_recurso, cantidad);
+        return 1; // Granted
+    } else {
+        SolicitudPendiente nueva = malloc(sizeof(struct solicitudPendiente_));
+        nueva->job_id = job_id;
+        nueva->socket_origen = socket_origen;
+        nueva->cantidad_pedida = cantidad;
+        nueva->instante_llegada = time(NULL);
+        
+        rec->pendientes = cola_encolar(rec->pendientes, nueva, no_copia_solicitud);
+        return 0; // Encolado
+    }
+}
+void gestor_manejar_release(EstadoGlobal estado, char* nombre_recurso, int job_id, int cantidad, void (*avisar_red)(int, int)) {
+    RecursoLocal rec = obtener_recurso(estado, nombre_recurso);
+    if (!rec || cantidad <= 0) return;
+
+    // Liberar solo lo que realmente tiene asignado
+    int liberado = registrar_liberacion(estado->libro_contable, job_id, nombre_recurso, cantidad);
+    if (liberado == 0) return; // Nada que liberar
+
+    // Devolver solo lo liberado a la disponibilidad
+    rec->disponible += liberado;
+
+    // Atender solicitudes pendientes (igual que antes, pero con el valor correcto)
+    while (!cola_es_vacia(rec->pendientes)) {
+        SolicitudPendiente solicitud = (SolicitudPendiente)cola_inicio(rec->pendientes, no_copia_solicitud);
+        if (solicitud == NULL) break;
+
+        if (rec->disponible >= solicitud->cantidad_pedida) {
+            rec->disponible -= solicitud->cantidad_pedida;
+            registrar_asignacion(estado->libro_contable, solicitud->job_id, solicitud->socket_origen, nombre_recurso, solicitud->cantidad_pedida);
+            if (avisar_red) avisar_red(solicitud->job_id, solicitud->socket_origen);
+            rec->pendientes = cola_desencolar(rec->pendientes, destruir_solicitud);
+        } else {
+            break;
+        }
+    }
+}
+
+void gestor_expirar_pedidos(EstadoGlobal estado, void (*avisar_timeout)(int, int)) {
+    time_t ahora = time(NULL);
+    // Un simple arreglo nos permite limpiar los 3 recursos de un tirazo
+    RecursoLocal recursos[] = {estado->cpu, estado->gpu, estado->mem};
+
+    for (int i = 0; i < 3; i++) {
+        RecursoLocal rec = recursos[i];
+        int termine = 0;
+
+        if (rec ==  NULL) continue;
+        
+        while (!cola_es_vacia(rec->pendientes) && !termine) {
+            SolicitudPendiente solicitud = (SolicitudPendiente)cola_inicio(rec->pendientes, no_copia_solicitud);
+            if (!solicitud) break;
+
+            if (difftime(ahora, solicitud->instante_llegada) >= TIEMPO_ESPERA) {
+                printf("[TIMEOUT] El job_id %d caducó en recurso %s.\n", solicitud->job_id, rec->nombre);
+                if (avisar_timeout) avisar_timeout(solicitud->job_id, solicitud->socket_origen);
+                rec->pendientes = cola_desencolar(rec->pendientes, destruir_solicitud);
+            } else {
+                termine = 1;
+            }
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// PROTOCOLO DE EMBARGO (Tragedia de desconexión)
+// -----------------------------------------------------------------------------
+static void (*aviso_red_actual)(int, int) = NULL;
+static EstadoGlobal estado_actual = NULL;
+
+static void callback_tragedia(char* nombre_recurso, int cantidad) {
+    // Aca nos saltamos registrar_liberacion porque liberar_recursos_socket 
+    // ya destruyó la ficha entera del cliente desconectado. Solo repartimos el oro recupeado.
+    RecursoLocal rec = obtener_recurso(estado_actual, nombre_recurso);
+    if (!rec) return;
+    
+    rec->disponible += cantidad;
+    
+    while (!cola_es_vacia(rec->pendientes)) {
+        SolicitudPendiente solicitud = (SolicitudPendiente)cola_inicio(rec->pendientes, no_copia_solicitud);
+        if (solicitud == NULL) break;
+
+        if (rec->disponible >= solicitud->cantidad_pedida) {
+            rec->disponible -= solicitud->cantidad_pedida;
+            registrar_asignacion(estado_actual->libro_contable, solicitud->job_id, solicitud->socket_origen, nombre_recurso, solicitud->cantidad_pedida);
+            if (aviso_red_actual) aviso_red_actual(solicitud->job_id, solicitud->socket_origen);
+            rec->pendientes = cola_desencolar(rec->pendientes, destruir_solicitud);
+        } else {
+            break;
+        }
+    }
+}
+
+void manejar_desconexion_socket(EstadoGlobal estado, int socket_caido, void (*avisar_red)(int, int)) {
     estado_actual = estado;
-    aviso_red_actual = avisar_red; 
+    aviso_red_actual = avisar_red;
     
-    printf("\n[ALERTA] El socket %d ha muerto. Ejecutando protocolo de embargo...\n", socket_caido);
-    
-    // 2. Ejecutamos la orden al libro contable. 
-    // Éste llamará internamente a 'callback_tragedia' por cada recurso embargado,
-    // devolviendo el oro a las arcas y avisando a la red si otros trabajos se despiertan.
     liberar_recursos_socket(estado->libro_contable, socket_caido, callback_tragedia);
     
-    // 3. Limpiamos el escenario
     estado_actual = NULL;
     aviso_red_actual = NULL;
-    printf("[ÉXITO] Recursos del socket %d recuperados y reasignados.\n\n", socket_caido);
 }
