@@ -1,15 +1,16 @@
 -module(tcpClient).
+-export([empezarConexion/2, terminarConexion/1,
+         solicitudNodos/1, solicitudTrabajo/3, liberarTrabajo/2, estadoTrabajo/2,
+         recibirRespuesta/2, procesarMensaje/1]).
 
 % COMIENZO DE CONEXION Y FINALIZACION-------------------------------------------
-
--export([empezarConexion/2, terminarConexion/1]).
 
 % Dada la direccion IP y el puerto, la funcion inicia la conexion
 % al agente de C y devuelve el Socket si tiene exito.
 empezarConexion(Direccion, Puerto) ->
   % Los datos recibidos son binarios, se entregan como vienen (crudos),
   % usamos conexion pasiva.
-  Opciones = [binary, {packet, 0}, {active, false}],
+  Opciones = [binary, {packet, line}, {active, false}],
   case gen_tcp:connect(Direccion, Puerto, Opciones) of
     {ok, Socket} ->
       {okConnect, Socket};
@@ -23,12 +24,10 @@ terminarConexion(Socket) ->
 
 % SOLICITUDES AL AGENTE---------------------------------------------------------
 
--export([solicitudNodos/1, solicitudTrabajo/3, liberarTrabajo/2, 
-         estadoTrabajo/2]).
 
 % Pide al agente C la lista de nodos participantes en la red.
 solicitudNodos(Socket) ->
-  gen_tcp:send(Socket, "GET NODES\n").
+  gen_tcp:send(Socket, "GET_NODES\n").
 
 % Dado el socket del agente de C, un id de trabajo y la lista de requerimientos
 % con la forma [{"IP", "recurso", cantidad}], la funcion solicita al agente
@@ -55,12 +54,11 @@ estadoTrabajo(Socket, JobId) ->
 
 % RESPUESTA DEL AGENTE---------------------------------------------------------
 
--export([recibirRespuesta/2, procesarMensaje/1]).
 
 % Dado el socket del agente y el pid del scheduler propiamente dicho, la 
 % funcion espera las respuestas del agente de C.
 recibirRespuesta(Socket, PidScheduler) ->
-  % 0 en el argumento indica que se lee todo lo que haya en el buffer.
+  % Con {packet, line}, recv devuelve exactamente una linea por llamada.
   case gen_tcp:recv(Socket, 0) of
     {ok, Binarios} ->
       % Convertimos el binario a un string.
