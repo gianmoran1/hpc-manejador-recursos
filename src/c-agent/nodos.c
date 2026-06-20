@@ -22,7 +22,7 @@ static void no_destruye(__attribute__((unused)) Nodo nodo){
 }
 
 static int nodo_comparar(Nodo a, Nodo b){
-    return strcmp(a->ip , b->ip);
+    return !strcmp(a->ip , b->ip) && (a->puerto == b->puerto);
 }
 
 static unsigned nodo_hash(Nodo a){
@@ -31,7 +31,7 @@ static unsigned nodo_hash(Nodo a){
     for (hashval = 0; *s != '\0'; ++s) {
         hashval = *s + 31 * hashval;
     }
-    return hashval;
+    return hashval + a->puerto;
 }
 
 TablaNodos crear_tabla_nodos(){
@@ -71,15 +71,19 @@ void agregar_nodo(Nodo nodo, TablaNodos tabla_nodos){
 }
 
 
-void reiniciar_timestamp(char* ip, TablaNodos tabla_nodos){
+int reiniciar_timestamp(char* ip, int puerto, TablaNodos tabla_nodos){
     Nodo nodoBusqueda = malloc(sizeof(struct nodo_));
     strncpy(nodoBusqueda->ip, ip, (sizeof (nodoBusqueda->ip) -1));
     nodoBusqueda->ip[sizeof(nodoBusqueda->ip) - 1] = '\0'; 
+    nodoBusqueda->puerto = puerto;
     Nodo nodo = tablahash_buscar(tabla_nodos->tabla,nodoBusqueda); 
     if (nodo != NULL){
         nodo->ultimo_anuncio = time(NULL);
+        free(nodoBusqueda);
+        return 1;
     }
     free(nodoBusqueda);
+    return 0;
 }
 
 
@@ -126,3 +130,52 @@ void desconectar(TablaNodos tabla_nodos){
 }
 
 
+void procesar_anuncio(TablaNodos tabla_nodos, char* ip, int puerto, int cpu, int gpu, int mem) {
+    int encontrado = reiniciar_timestamp(ip, puerto, tabla_nodos);
+    if (encontrado) {
+        // EL NODO EXISTE, SOLO SE REINICIA EL TIMESTAMP
+        return;     
+
+    } else {
+        // ES UN NODO NUEVO
+        
+        // Usamos tus funciones originales para crearlo e insertarlo
+        Nodo nuevo = crear_nodo(ip, puerto, cpu, gpu, mem);
+        agregar_nodo(nuevo, tabla_nodos);
+    }
+}
+
+
+char* get_nodes(TablaNodos tabla_nodos) {
+    int capacidad_actual = 2048; // Búfer inicial de 2KB
+    char* buffer = malloc(capacidad_actual);
+    if (!buffer) return NULL;
+    
+    strcpy(buffer, "NODES ");
+    
+    GList temp = tabla_nodos->lista;
+    int primero = 1;
+    
+    while (temp != NULL) {
+        Nodo n = (Nodo)temp->data;
+        char temp_str[256];
+        
+        // Formato estricto: IP:Puerto:cpu:X:mem:Y:gpu:Z
+        sprintf(temp_str, "%s%s:%d:cpu:%d:mem:%d:gpu:%d", 
+                primero ? "" : ";", n->ip, n->puerto, n->cpu, n->mem, n->gpu);
+        
+        // Si el string está a punto de desbordar la memoria, la duplicamos
+        if (strlen(buffer) + strlen(temp_str) + 1 >= (size_t)capacidad_actual) {
+            capacidad_actual *= 2;
+            buffer = realloc(buffer, capacidad_actual);
+        }
+        
+        strcat(buffer, temp_str);
+        
+        primero = 0;
+        temp = temp->next;
+    }
+    
+    // Este string debe ser liberado con free() después de enviarlo por el socket
+    return buffer;
+}
