@@ -4,6 +4,8 @@
 #include <stdio.h>
 
 
+/*funciones auxiliares para la tabla de trabajos*/
+
 static void* job_no_copia(void* dato) {
     return dato;
 }
@@ -65,7 +67,7 @@ void registrar_asignacion(TablaJobs tabla_jobs, int job_id, int socket, char* re
     else if (strcmp(recurso, "mem") == 0) job->mem_usada += cantidad;
 }
 
-// jobs.c
+
 int registrar_liberacion(TablaJobs tabla_jobs, int job_id, char* recurso, int cantidad) {
     struct jobActivo_ busqueda;
     busqueda.job_id = job_id;
@@ -89,7 +91,7 @@ int registrar_liberacion(TablaJobs tabla_jobs, int job_id, char* recurso, int ca
 
     // Si el trabajo quedó sin deudas, eliminarlo
     if (job->cpu_usada == 0 && job->gpu_usada == 0 && job->mem_usada == 0) {
-        // ... (código existente para eliminar de la lista)
+        /*eliminamos primero el puntero de la lista, luego destruimos el job de la tabla*/
         GList temp = tabla_jobs->lista;
         if (temp != NULL) {
             if (temp->data == job) {
@@ -112,19 +114,17 @@ int registrar_liberacion(TablaJobs tabla_jobs, int job_id, char* recurso, int ca
 }
 
 
-// NUESTRO ESCUDO CONTRA TRAGEDIAS (Refactorizado para concurrencia segura)
+
 void liberar_recursos_socket(TablaJobs tabla_jobs, int socket_caido, void (*liberar_recurso_cb)(char*, int)) {
     GList temp = tabla_jobs->lista;
     if (temp == NULL) return;
 
-    // Acumuladores para guardar el botín antes de repartirlo
+    
     int total_cpu_liberada = 0;
     int total_gpu_liberada = 0;
     int total_mem_liberada = 0;
 
-    // ==========================================
-    // FASE 1: RECOLECCIÓN Y LIMPIEZA
-    // ==========================================
+
     
     // 1. Limpiamos las cabezas que pertenezcan al socket caído
     while (temp != NULL) {
@@ -132,7 +132,6 @@ void liberar_recursos_socket(TablaJobs tabla_jobs, int socket_caido, void (*libe
         if (job->socket_origen == socket_caido) {
             GList next = temp->next;
 
-            // En lugar de llamar al callback, guardamos el oro en los bolsillos
             total_cpu_liberada += job->cpu_usada;
             total_gpu_liberada += job->gpu_usada;
             total_mem_liberada += job->mem_usada;
@@ -167,11 +166,8 @@ void liberar_recursos_socket(TablaJobs tabla_jobs, int socket_caido, void (*libe
         }
     }
 
-    // ==========================================
-    // FASE 2: REPARTICIÓN (Totalmente segura)
-    // ==========================================
-    
-    // Ahora que la lista está intacta y nadie la está tocando, 
+
+
     // disparamos los callbacks con el total acumulado.
     if (total_cpu_liberada > 0) liberar_recurso_cb("cpu", total_cpu_liberada);
     if (total_gpu_liberada > 0) liberar_recurso_cb("gpu", total_gpu_liberada);

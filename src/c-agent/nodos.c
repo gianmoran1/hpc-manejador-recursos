@@ -5,7 +5,7 @@
 #include <string.h>
 
 
-
+/*funciones para la tabla de nodos*/
 
 static Nodo nodo_copiar(Nodo nodo){
     return nodo;
@@ -35,6 +35,7 @@ static unsigned nodo_hash(Nodo a){
     }
     return hashval + a->puerto;
 }
+//-------------------------------------------------------------------------------------------------------------------------------------
 
 TablaNodos crear_tabla_nodos(){
     TablaNodos tabla_nodos = malloc(sizeof(struct tabla_nodos));
@@ -133,23 +134,23 @@ void desconectar(TablaNodos tabla_nodos){
 
 
 void procesar_anuncio(TablaNodos tabla_nodos, char* ip, int puerto, int cpu, int gpu, int mem) {
-    // 1. Armamos el objeto falso de búsqueda
+    
     struct nodo_ busqueda;
     strncpy(busqueda.ip, ip, (sizeof(busqueda.ip) - 1));
     busqueda.ip[sizeof(busqueda.ip) - 1] = '\0';
     busqueda.puerto = puerto;
 
-    // 2. Buscamos en el diccionario
+    
     Nodo encontrado = tablahash_buscar(tabla_nodos->tabla, &busqueda);
 
     if (encontrado) {
-        // EL NODO EXISTE: Actualizamos latido Y RECURSOS
+        
         encontrado->ultimo_anuncio = time(NULL);
         encontrado->cpu = cpu;
         encontrado->gpu = gpu;
         encontrado->mem = mem;
     } else {
-        // ES UN NODO NUEVO
+        
         Nodo nuevo = crear_nodo(ip, puerto, cpu, gpu, mem);
         agregar_nodo(nuevo, tabla_nodos);
     }
@@ -186,11 +187,13 @@ char* get_nodes(TablaNodos tabla_nodos) {
         temp = temp->next;
     }
     
+    /*IMPORTANTE*/
     // Este string debe ser liberado con free() después de enviarlo por el socket
     return buffer;
 }
 
 int buscar_nodo(char* ip, int puerto, TablaNodos tabla_nodos){
+    /*creamos nodo de busqueda*/
     struct nodo_ busqueda;
     strncpy(busqueda.ip, ip, (sizeof(busqueda.ip) - 1));
     busqueda.ip[sizeof(busqueda.ip) - 1] = '\0';
