@@ -48,7 +48,6 @@ int set_nonblocking(int fd) {
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);   // Agarrá la configuración actual, sumale la bandera O_NONBLOCK usando una compuerta lógica OR bit a bit (|), y guardala. XX
 }
 
-
 // Funcion que crea mi socket de escucha TCP, tanto local para el erlang como
 // global para cualquier otro agente C
 int mk_tcp_lsock(int port, const char* ip) {
@@ -105,7 +104,6 @@ int mk_udp_lsock(int port) {
 
     return usock;
 }
-
 
 
 // Crea un temporizador que "dispara" cada X segundos
@@ -176,4 +174,121 @@ int conectar_a_nodo(const char *ip_destino, int puerto_destino) {
 
 
     return sockfd;
+}
+
+
+
+int atender_cliente_tcp(ClienteConectado *cliente) {
+    ssize_t bytes_recibidos;
+
+    // leo hasta vaciar lo que hay en el socket, y lo voy acumulando en el buffer de este cliente. 
+    // Si el socket se queda sin datos,  salgo del bucle para procesar lo que ya tengo acumulado. 
+    // Si recv me devuelve 0, es porque el cliente se desconectó, así que cierro todo y libero memoria.
+    while (1) {
+        // Calculamos cuánto espacio libre nos queda en la ficha de este cliente
+        int espacio_disponible = sizeof(cliente->buffer) - cliente->bytes_leidos - 1;
+
+        // PROTECCIÓN ANTI-DOS: Si se llenó el buffer y nunca mandó un '\n', es un nodo defectuoso
+        if (espacio_disponible <= 0) {
+            printf("[FD %d] Error: Mensaje demasiado largo sin '\\n'. Desconectando por seguridad.\n", cliente->fd);
+            return 0;
+            
+            // // if (!cliente->es_erlang) santos_eliminar_nodo(cliente->fd);
+            // close(cliente->fd);
+            // free(cliente);
+            // return;
+        }
+
+        // Leemos de la red y lo guardamos DIRECTAMENTE al final de lo que ya teníamos
+        bytes_recibidos = recv(cliente->fd, cliente->buffer + cliente->bytes_leidos, espacio_disponible, 0);
+
+        if (bytes_recibidos == -1) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                break; // Red vacía, salimos a procesar
+            } else {
+                perror("Error leyendo del socket");
+                return 0;
+            }
+        } 
+        else if (bytes_recibidos == 0) return 0;
+            // // ¡Desconexión limpia!             XXXXX SE SACA
+            // if (cliente->es_erlang) {
+            //     printf("[FD %d] ALERTA: Erlang se desconectó.\n", cliente->fd);
+            // } else {
+            //     printf("[FD %d] Nodo de red desconectado.\n", cliente->fd);
+            //     // santos_eliminar_nodo(cliente->fd);
+            // }
+            // close(cliente->fd);
+            // free(cliente);
+        else {
+            // Actualizamos el contador de bytes y cerramos el string
+            cliente->bytes_leidos += bytes_recibidos;
+            cliente->buffer[cliente->bytes_leidos] = '\0';
+        }
+    }
+    return 1; 
+
+}
+
+// Devuelve 1 si hay un mensaje listo en 'buffer_destino', o 0 si no hay nada o no nos interesa porque es nuestro mensaje.
+int atender_cliente_udp(int usock_udp, char *buffer_destino, size_t tamaño_maximo) {
+    char buffer_red[512]; // Un temporal cortito solo para sacar los datos del enchufe
+    struct sockaddr_in src_addr;
+    socklen_t src_len = sizeof(src_addr);
+
+    ssize_t bytes_recibidos = recvfrom(usock_udp, buffer_red, sizeof(buffer_red) - 1, 0, (struct sockaddr *)&src_addr, &src_len);
+    
+    if (bytes_recibidos <= 0) {
+        // Red vacía o error, avisamos que no hay nada
+        return 0; 
+    }
+
+    buffer_red[bytes_recibidos] = '\0'; 
+    
+    char ip_remitente[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &(src_addr.sin_addr), ip_remitente, INET_ADDRSTRLEN);
+
+    // Si es nuestro propio eco, avisamos que no hay nada interesante
+    // if (strcmp(ip_remitente, mi_ip_publica) == 0) return 0;
+    
+    // Escribimos el resultado directamente en la variable del llamador
+    snprintf(buffer_destino, tamaño_maximo, "%s %s", ip_remitente, buffer_red);
+
+    return 1; 
+}
+
+
+// Envía un mensaje a un cliente ya conectado. Devuelve 1 si se envió bien, o -1 si hubo un error (socket caído, etc).
+int enviar_mensaje_tcp(int fd, const char *mensaje) {
+    ssize_t enviados = send(fd, mensaje, strlen(mensaje), 0);
+    
+    if (enviados <= 0) {
+        printf("Error: No se pudo enviar al FD %d (socket roto o caído).\n", fd);
+        return -1; 
+    }
+    
+    printf("Mensaje enviado correctamente al FD %d: %s", fd, mensaje);
+    return 1;
+}
+
+
+// Envía un datagrama UDP a una IP y puerto específicos.
+// Devuelve 1 si fue un éxito, o -1 si hubo un error.
+int enviar_mensaje_udp(int usock_udp, const char *ip_destino, int puerto_destino, const char *mensaje) {
+    struct sockaddr_in dest;
+    memset(&dest, 0, sizeof(dest));
+    dest.sin_family = AF_INET;
+    dest.sin_port = htons(puerto_destino);
+    dest.sin_addr.s_addr = inet_addr(ip_destino);
+
+    ssize_t enviados = sendto(usock_udp, mensaje, strlen(mensaje), 0, (struct sockaddr*)&dest, sizeof(dest));
+
+    if (enviados <= 0) {
+        perror("Error enviando mensaje UDP");
+        return -1;
+    }
+
+    // Como es UDP, no sabemos si el otro lo recibió, solo sabemos que salió de nuestra placa de red.
+    printf("Datagrama UDP enviado a %s:%d -> %s", ip_destino, puerto_destino, mensaje);
+    return 1;
 }

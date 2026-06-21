@@ -11,6 +11,7 @@
 static void* no_copia_solicitud(void* dato) { return dato; }
 static void destruir_solicitud(void* dato) { free(dato); }
 
+
 static RecursoLocal obtener_recurso(EstadoGlobal estado, char* nombre) {
     if (strcmp(nombre, "cpu") == 0) return estado->cpu;
     if (strcmp(nombre, "gpu") == 0) return estado->gpu;

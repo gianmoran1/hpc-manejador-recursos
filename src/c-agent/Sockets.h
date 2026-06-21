@@ -1,3 +1,6 @@
+#ifndef __SOCKETS_H__
+#define __SOCKETS_H__
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,7 +22,7 @@
 #include <sys/timerfd.h> /* Para timerfd_create */
 #include <time.h>
 #include <errno.h>
-
+#include "cliente.h"
 
 #define MAX_EVENTS 10
 #define PUERTO_TCP 4040
@@ -39,10 +42,21 @@ int mk_timer(int segundos);
 
 int conectar_a_nodo(const char *ip_destino, int puerto_destino);
 
+int atender_cliente_tcp(ClienteConectado *cliente);
+
+int atender_cliente_udp(int usock_udp, char *buffer_destino, size_t tamaño_maximo);
+
+int enviar_mensaje_tcp(int fd, const char *mensaje);
+
+int enviar_mensaje_udp(int usock_udp, const char *ip_destino, int puerto_destino, const char *mensaje);
 
 
 
 
+
+
+
+#endif /* __SOCKETS_H__ */
 
 
 
