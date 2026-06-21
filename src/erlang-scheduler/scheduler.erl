@@ -19,7 +19,7 @@ iniciar(Socket, PidMain) ->
 % Dado el Pid del scheduler la funcion pide la lista de nodos cada 15 segundos 
 % para mantener el cluster actualizado.
 loopActualizadorNodos(PidScheduler) ->
-  timer:sleep(15000),
+  timer:sleep(?TIEMPO_ACTUALIZACION_NODOS),
   PidScheduler ! actualizarNodos,
   loopActualizadorNodos(PidScheduler).
 

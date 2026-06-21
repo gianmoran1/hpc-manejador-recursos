@@ -11,8 +11,7 @@ Para ejecutarlo con Valgrind colocamos << valgrind -s --leak-check=full
 --track-origins=yes --show-leak-kinds=all ./bin/main >> 
 
   Compilación en Erlang: Desde una terminal Erlang se coloca:
-c(loggerScheduler), c(tcpClient), c(manejoRecursos), c(jobWorker), 
-c(scheduler), c(main).
+c(loggerScheduler), c(tcpClient), c(manejoRecursos), c(jobWorker), c(scheduler), c(main).
   
   Ejecución en Erlang: Desde la terminal habiendo compilado todo, el programa
 se inicia con: main:main().

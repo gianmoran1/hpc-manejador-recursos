@@ -1,11 +1,13 @@
 -module(jobWorker).
 -export([loopGeneradorTrabajos/1, iniciarJobWorker/4]).
+
 -include("../../include/config.hrl").
 
 % Dado el Pid del scheduler, la funcion se encarga de generar trabajos cada 
 % cierto tiempo.
 loopGeneradorTrabajos(PidScheduler) ->
-  timer:sleep(rand:uniform(5000) + 2000),
+  timer:sleep(rand:uniform(?MAX_RANDOM_ESPERA) + 
+                           ?MIN_TIEMPO_ENVIO_TRABAJOS),
   PidScheduler ! generarTrabajo,
   loopGeneradorTrabajos(PidScheduler).
 
@@ -26,7 +28,7 @@ ejecutarTrabajoSimulado(Socket, JobId, PidScheduler, RecursosTotales) ->
   receive
     {granted, JobId} ->
       loggerScheduler:log(io_lib:format("[GRANTED] JobId:~w", [JobId])),
-      timer:sleep(rand:uniform(5000) + 2000),
+      timer:sleep(rand:uniform(?MAX_RANDOM_ESPERA) + ?MIN_TIEMPO_ESPERA_TRABAJO),
       tcpClient:liberarTrabajo(Socket, JobId);
 
     {denied, JobId} ->
@@ -35,7 +37,7 @@ ejecutarTrabajoSimulado(Socket, JobId, PidScheduler, RecursosTotales) ->
     {timeout, JobId} ->
       % Posible deadlock evitado con timeout.
       loggerScheduler:log(io_lib:format("[TIMEOUT] JobId:~w", [JobId])),
-      timer:sleep(rand:uniform(3000)),
+      timer:sleep(rand:uniform(?MAX_RANDOM_ESPERA)),
       % Intentamos ejecutar el trabajo nuevamente.
       ejecutarTrabajoSimulado(Socket, JobId, PidScheduler, RecursosTotales)
   end.

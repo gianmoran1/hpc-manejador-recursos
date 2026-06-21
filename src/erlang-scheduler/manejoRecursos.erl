@@ -56,11 +56,8 @@ asignarNodos({CantCpu, CantMem, CantGpu}, ListaNodos) ->
                           fun({_, _, {_, Max, _}}) -> Max end, ListaNodos),
   ReqGpu = asignarRecurso("gpu", CantGpu, 
                           fun({_, _, {_, _, Max}}) -> Max end, ListaNodos),
-  
-  % Si alguna de las listas devolvio un atomo 'insuficiente', fallamos todo.
-  case (ReqCpu =:= insuficiente) orelse 
-       (ReqMem =:= insuficiente) orelse 
-       (ReqGpu =:= insuficiente) of
+  % Si alguna de las listas devolvio un atomo insuficiente, fallamos todo.
+  case lists:member(insuficiente, [ReqCpu, ReqMem, ReqGpu]) of
     true  -> [];
     false -> ReqCpu ++ ReqMem ++ ReqGpu
   end.
@@ -73,13 +70,12 @@ asignarRecurso(Tipo, CantidadPedida, GetMax, ListaNodos) ->
   NodosMezclados = [X || {_,X} <- lists:sort([{rand:uniform(), N} || N <- ListaNodos])],
   asignarVoraz(Tipo, CantidadPedida, GetMax, NodosMezclados, []).
 
-% Caso Base: Ya cubrimos toda la demanda.
+% Caso ya cubrimos toda la demanda.
 asignarVoraz(_Tipo, 0, _GetMax, _Nodos, Acumulador) -> 
   Acumulador;
-% Caso Fallo: Nos quedamos sin nodos y todavia falta cubrir demanda.
+% Caso fallo, nos quedamos sin nodos y todavia falta cubrir demanda.
 asignarVoraz(_Tipo, _Falta, _GetMax, [], _Acumulador) -> 
   insuficiente;
-% Caso Recursivo: Evaluamos el nodo actual.
 asignarVoraz(Tipo, Falta, GetMax, [{IP, _Puerto, _} = Nodo | RestoNodos], Acc) ->
   Disponible = GetMax(Nodo),
   case Disponible of

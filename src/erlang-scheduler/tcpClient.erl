@@ -30,7 +30,7 @@ solicitudNodos(Socket) ->
 solicitudTrabajo(Socket, JobId, ListaRequerimientos) ->
   ListaRequerimientosStr = [io_lib:format("@~s:~s:~w", [IP, Recurso, Cantidad]) 
                             || {IP, Recurso, Cantidad} <- ListaRequerimientos],
-  Requerimientos = lists:join(" ", ListaRequerimientosStr),
+  Requerimientos = lists:flatten(lists:join(" ", ListaRequerimientosStr)),
   
   Mensaje = io_lib:format("JOB_REQUEST ~w ~s\n", [JobId, Requerimientos]),
   gen_tcp:send(Socket, Mensaje).
