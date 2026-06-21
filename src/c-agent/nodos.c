@@ -22,7 +22,9 @@ static void no_destruye(__attribute__((unused)) Nodo nodo){
 }
 
 static int nodo_comparar(Nodo a, Nodo b){
-    return (strcmp(a->ip , b->ip) == 0) && (a->puerto == b->puerto);
+    int cmp = strcmp(a->ip, b->ip);
+    if (cmp != 0) return cmp;
+    return a->puerto - b->puerto;
 }
 
 static unsigned nodo_hash(Nodo a){
