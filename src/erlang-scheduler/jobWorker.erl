@@ -1,5 +1,6 @@
 -module(jobWorker).
 -export([loopGeneradorTrabajos/1, iniciarJobWorker/4]).
+-include("../../include/config.hrl").
 
 % Dado el Pid del scheduler, la funcion se encarga de generar trabajos cada 
 % cierto tiempo.
@@ -40,7 +41,7 @@ ejecutarTrabajoSimulado(Socket, JobId, PidScheduler, RecursosTotales) ->
   end.
 
 % Genera {CantCpu, CantMem, CantGpu} donde cada valor es 0 (no pedir)
-% o entre 1 y la mitad del total global. Garantiza al menos un valor > 0.
+% o entre 1 y Total/MAX_JOBS. Garantiza al menos un valor > 0.
 generarCantidades({TotalCpu, TotalMem, TotalGpu}) ->
   Cantidades = {genCant(TotalCpu), genCant(TotalMem), genCant(TotalGpu)},
   case Cantidades of
@@ -52,5 +53,5 @@ genCant(0) -> 0;
 genCant(Total) ->
   case rand:uniform(2) of
     1 -> 0;
-    2 -> rand:uniform(max(1, Total div 2))
+    2 -> rand:uniform(max(1, Total div ?MAX_JOBS))
   end.
