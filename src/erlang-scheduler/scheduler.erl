@@ -1,6 +1,8 @@
 -module(scheduler).
 -export([iniciar/2, loopActualizadorNodos/1]).
 
+-define(MAX_JOBS, 10).
+
 % Dado el socket del agente de C y el pid del main, la funcion inicia el 
 % scheduler, este espera a que este creado el oyente del agente de C.
 iniciar(Socket, PidMain) ->
@@ -43,17 +45,19 @@ loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso, PidMain) ->
     % Interacciones con el trabajo simulado:
     generarTrabajo ->
       case ListaNodos of
-        [] -> 
+        [] ->
           loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso, PidMain);
-        _  ->
+        _ ->
           case RecursosTotales of
-            {0,0,0} -> % Si no hay recursos o la lista es vacia ignoramos.
+            {0,0,0} ->
+              loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso, PidMain);
+            _ when map_size(JobsEnCurso) >= ?MAX_JOBS ->
               loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso, PidMain);
             _ ->
               JobId = erlang:unique_integer([positive, monotonic]),
-              WorkerPid = spawn(jobWorker, iniciarJobWorker, 
-                                [Socket, JobId, self(), RecursosTotales]),
-              loopScheduler(Socket, ListaNodos, RecursosTotales, 
+              {WorkerPid, _Ref} = spawn_monitor(jobWorker, iniciarJobWorker,
+                                                [Socket, JobId, self(), RecursosTotales]),
+              loopScheduler(Socket, ListaNodos, RecursosTotales,
                             JobsEnCurso#{JobId => WorkerPid}, PidMain)
           end
       end;
@@ -69,8 +73,18 @@ loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso, PidMain) ->
       loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso, PidMain);
 
     {jobTerminado, JobId} ->
-      loopScheduler(Socket, ListaNodos, RecursosTotales, 
+      loopScheduler(Socket, ListaNodos, RecursosTotales,
                     maps:remove(JobId, JobsEnCurso), PidMain);
+
+    % Worker bajo de forma inesperada (crash): limpiamos el mapa.
+    {'DOWN', _Ref, process, _Pid, normal} ->
+      loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso, PidMain);
+
+    {'DOWN', _Ref, process, Pid, Razon} ->
+      JobsLimpios = maps:filter(fun(_Id, P) -> P =/= Pid end, JobsEnCurso),
+      Str = io_lib:format("Worker ~p termino con error: ~p", [Pid, Razon]),
+      loggerScheduler:log(Str),
+      loopScheduler(Socket, ListaNodos, RecursosTotales, JobsLimpios, PidMain);
 
     % Respuestas desde el agente de C:
     {granted, JobId} ->
@@ -86,13 +100,15 @@ loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso, PidMain) ->
       loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso, PidMain);
 
     {comandoDesconocido, StrComando} ->
-      Str = io_lib:format("Comando desconocido del agente: ~s", [StrComando]),
+      Str = io_lib:format("Comando desconocido del agente: ~p", [StrComando]),
       loggerScheduler:log(Str),
       loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso, PidMain);
 
     {errorRecvAgente, Razon} ->
-      % Se cayo la conexion con el oyente, terminamos el programa
-      PidMain ! {cerrarSistema, Razon}
+      % Matamos todos los workers: quedarian colgados en receive sin respuesta.
+      maps:foreach(fun(_JobId, Pid) -> exit(Pid, shutdown) end, JobsEnCurso),
+      PidMain ! {cerrarSistema, Razon},
+      exit(self(), cerrarSistema)
   end.
 
 % Dado el identificador del trabajo (JobId), un mensaje y el mapa de trabajos 

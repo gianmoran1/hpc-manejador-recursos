@@ -34,7 +34,6 @@ ejecutarTrabajoSimulado(Socket, JobId, PidScheduler, RecursosTotales) ->
     {timeout, JobId} ->
       % Posible deadlock evitado con timeout.
       loggerScheduler:log(io_lib:format("[TIMEOUT] JobId:~w", [JobId])),
-      tcpClient:liberarTrabajo(Socket, JobId),
       timer:sleep(rand:uniform(3000)),
       % Intentamos ejecutar el trabajo nuevamente.
       ejecutarTrabajoSimulado(Socket, JobId, PidScheduler, RecursosTotales)
