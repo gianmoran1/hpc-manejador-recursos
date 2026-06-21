@@ -25,10 +25,7 @@ Nodo crear_nodo(char* ip, int puerto, int cpu, int gpu, int mem);
 
 void agregar_nodo(Nodo, TablaNodos);
 
-
-void limpiar_nodos(TablaNodos);
-
-void reiniciar_timestamp(char* ip, TablaNodos);
+int reiniciar_timestamp(char* ip, int puerto, TablaNodos);
 
 TablaNodos crear_tabla_nodos();
 
@@ -36,8 +33,10 @@ void destruir_tabla_nodos(TablaNodos);
 
 void desconectar(TablaNodos tabla_nodos);
 
+char* get_nodes(TablaNodos tabla_nodos);
 
 
+void procesar_anuncio(TablaNodos tabla_nodos, char* ip, int puerto, int cpu, int gpu, int mem);
 
 
 

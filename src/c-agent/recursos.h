@@ -4,8 +4,7 @@
 #include "cola.h"
 #include <time.h>
 
-typedef void (*FuncionAviso)(int job_id, int socket_origen);
-
+// 1. Movemos las estructuras acá para que el Gestor pueda verlas
 typedef struct solicitudPendiente_{
     int job_id;
     int socket_origen;
@@ -20,10 +19,8 @@ typedef struct recursoLocal_{
     Cola pendientes;       
 } *RecursoLocal;
 
-
+// 2. Quitamos todos los callbacks y la lógica. Solo dejamos la gestión de memoria.
 RecursoLocal recurso_crear(char* nombre, int capacidad);
 void recurso_destruir(RecursoLocal rec);
-int manejar_reserva(RecursoLocal rec, int job_id, int socket_origen, int cantidad);
-void manejar_release(RecursoLocal rec, int cantidad, FuncionAviso avisar_red);
-void expirar_pedidos(RecursoLocal rec, FuncionAviso avisar_timeout);
+
 #endif /* __RECURSOS_H__ */
