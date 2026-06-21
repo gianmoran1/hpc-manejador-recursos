@@ -24,7 +24,7 @@ EstadoGlobal estado_crear(int cap_cpu, int cap_gpu, int cap_mem) {
     e->gpu = recurso_crear("gpu", cap_gpu);
     e->mem = recurso_crear("mem", cap_mem);
     e->libro_contable = crear_tabla_jobs();
-    e->registro_nodos = crear_tabla_nodos()
+    e->registro_nodos = crear_tabla_nodos();
     pthread_mutex_init(&e->lock, NULL);
     return e;
 }
