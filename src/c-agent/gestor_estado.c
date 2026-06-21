@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <time.h>
 
+
 #define TIEMPO_ESPERA 30.0
 
 // Helpers de memoria para la Cola
@@ -23,6 +24,8 @@ EstadoGlobal estado_crear(int cap_cpu, int cap_gpu, int cap_mem) {
     e->gpu = recurso_crear("gpu", cap_gpu);
     e->mem = recurso_crear("mem", cap_mem);
     e->libro_contable = crear_tabla_jobs();
+    e->registro_nodos = crear_tabla_nodos()
+    pthread_mutex_init(&e->lock, NULL);
     return e;
 }
 
@@ -31,6 +34,7 @@ void estado_destruir(EstadoGlobal estado) {
     recurso_destruir(estado->gpu);
     recurso_destruir(estado->mem);
     destruir_tabla_jobs(estado->libro_contable);
+    destruir_tabla_nodos(estado->registro_nodos);
     free(estado);
 }
 
@@ -39,30 +43,35 @@ void estado_destruir(EstadoGlobal estado) {
 // -----------------------------------------------------------------------------
 
 int gestor_manejar_reserva(EstadoGlobal estado, char* nombre_recurso, int job_id, int socket_origen, int cantidad) {
+    pthread_mutex_lock(&estado->lock);
+
+    int resultado = -1; // DENIED por defecto
     RecursoLocal rec = obtener_recurso(estado, nombre_recurso);
-    if (!rec) return -1;
 
-    // Escudo contra el campesino iluso
-    if (cantidad > rec->capacidad_total) return -1;
+    if (rec != NULL && cantidad > 0 && cantidad <= rec->capacidad_total) {
+        if (rec->disponible >= cantidad && cola_es_vacia(rec->pendientes)) {
+            rec->disponible -= cantidad;
+            registrar_asignacion(estado->libro_contable, job_id, socket_origen, nombre_recurso, cantidad);
+            resultado = 1; // Granted
+        } else {
+            SolicitudPendiente nueva = malloc(sizeof(struct solicitudPendiente_));
+            nueva->job_id = job_id;
+            nueva->socket_origen = socket_origen;
+            nueva->cantidad_pedida = cantidad;
+            nueva->instante_llegada = time(NULL);
 
-    if (cantidad <= 0) return -1; 
-
-    if (rec->disponible >= cantidad && cola_es_vacia(rec->pendientes)) {
-        rec->disponible -= cantidad;
-        registrar_asignacion(estado->libro_contable, job_id, socket_origen, nombre_recurso, cantidad);
-        return 1; // Granted
-    } else {
-        SolicitudPendiente nueva = malloc(sizeof(struct solicitudPendiente_));
-        nueva->job_id = job_id;
-        nueva->socket_origen = socket_origen;
-        nueva->cantidad_pedida = cantidad;
-        nueva->instante_llegada = time(NULL);
-        
-        rec->pendientes = cola_encolar(rec->pendientes, nueva, no_copia_solicitud);
-        return 0; // Encolado
+            rec->pendientes = cola_encolar(rec->pendientes, nueva, no_copia_solicitud);
+            resultado = 0; // Encolado
+        }
     }
+
+    pthread_mutex_unlock(&estado->lock);
+    return resultado;
 }
+
 void gestor_manejar_release(EstadoGlobal estado, char* nombre_recurso, int job_id, int cantidad, void (*avisar_red)(int, int)) {
+    pthread_mutex_lock(&estado->lock);
+
     RecursoLocal rec = obtener_recurso(estado, nombre_recurso);
     if (!rec || cantidad <= 0) return;
 
@@ -87,9 +96,12 @@ void gestor_manejar_release(EstadoGlobal estado, char* nombre_recurso, int job_i
             break;
         }
     }
+    pthread_mutex_unlock(&estado->lock);
 }
 
+
 void gestor_expirar_pedidos(EstadoGlobal estado, void (*avisar_timeout)(int, int)) {
+    pthread_mutex_lock(&estado->lock);
     time_t ahora = time(NULL);
     // Un simple arreglo nos permite limpiar los 3 recursos de un tirazo
     RecursoLocal recursos[] = {estado->cpu, estado->gpu, estado->mem};
@@ -113,6 +125,7 @@ void gestor_expirar_pedidos(EstadoGlobal estado, void (*avisar_timeout)(int, int
             }
         }
     }
+    pthread_mutex_unlock(&estado->lock);
 }
 
 // -----------------------------------------------------------------------------
@@ -145,6 +158,7 @@ static void callback_tragedia(char* nombre_recurso, int cantidad) {
 }
 
 void manejar_desconexion_socket(EstadoGlobal estado, int socket_caido, void (*avisar_red)(int, int)) {
+    pthread_mutex_lock(&estado->lock);
     estado_actual = estado;
     aviso_red_actual = avisar_red;
     
@@ -152,4 +166,32 @@ void manejar_desconexion_socket(EstadoGlobal estado, int socket_caido, void (*av
     
     estado_actual = NULL;
     aviso_red_actual = NULL;
+    pthread_mutex_unlock(&estado->lock);
+}
+
+
+// -----------------------------------------------------------------------------
+// OPERACIONES DEL RADAR DE NODOS (Protocolo Erlang / UDP)
+// -----------------------------------------------------------------------------
+
+void gestor_procesar_anuncio(EstadoGlobal estado, char* ip, int puerto, int cpu, int gpu, int mem) {
+    pthread_mutex_lock(&estado->lock);
+    // Redirige la orden directamente al módulo de nodos pasando el registro correspondiente
+    procesar_anuncio(estado->registro_nodos, ip, puerto, cpu, gpu, mem);
+    pthread_mutex_unlock(&estado->lock);
+}
+
+char* gestor_get_nodes(EstadoGlobal estado) {
+     pthread_mutex_lock(&estado->lock);
+    // Retorna el string generado dinámicamente. 
+    // Recuerda avisarle al ing. que haga free() tras hacer el send()
+    return get_nodes(estado->registro_nodos);
+    pthread_mutex_unlock(&estado->lock);
+}
+
+void gestor_desconectar_nodos(EstadoGlobal estado) {
+     pthread_mutex_lock(&estado->lock);
+    // Ejecuta la guillotina sobre los nodos que superaron los 15s de inactividad
+    desconectar(estado->registro_nodos);
+    pthread_mutex_unlock(&estado->lock);
 }
