@@ -73,11 +73,17 @@ void gestor_manejar_release(EstadoGlobal estado, char* nombre_recurso, int job_i
     pthread_mutex_lock(&estado->lock);
 
     RecursoLocal rec = obtener_recurso(estado, nombre_recurso);
-    if (!rec || cantidad <= 0) return;
+    // ¡CORRECCIÓN!: Desbloqueamos antes del return de emergencia
+    if (!rec || cantidad <= 0) {
+        pthread_mutex_unlock(&estado->lock); 
+        return; 
+    }
 
-    // Liberar solo lo que realmente tiene asignado
     int liberado = registrar_liberacion(estado->libro_contable, job_id, nombre_recurso, cantidad);
-    if (liberado == 0) return; // Nada que liberar
+    if (liberado == 0) {
+        pthread_mutex_unlock(&estado->lock); // ¡CORRECCIÓN!
+        return; 
+    }
 
     // Devolver solo lo liberado a la disponibilidad
     rec->disponible += liberado;
@@ -182,11 +188,13 @@ void gestor_procesar_anuncio(EstadoGlobal estado, char* ip, int puerto, int cpu,
 }
 
 char* gestor_get_nodes(EstadoGlobal estado) {
-     pthread_mutex_lock(&estado->lock);
-    // Retorna el string generado dinámicamente. 
-    // Recuerda avisarle al ing. que haga free() tras hacer el send()
-    return get_nodes(estado->registro_nodos);
+    pthread_mutex_lock(&estado->lock);
+    
+    // ¡CORRECCIÓN!: Guardamos el resultado temporalmente para poder abrir la puerta
+    char* resultado = get_nodes(estado->registro_nodos);
+    
     pthread_mutex_unlock(&estado->lock);
+    return resultado;
 }
 
 void gestor_desconectar_nodos(EstadoGlobal estado) {

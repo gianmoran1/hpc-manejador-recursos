@@ -131,15 +131,23 @@ void desconectar(TablaNodos tabla_nodos){
 
 
 void procesar_anuncio(TablaNodos tabla_nodos, char* ip, int puerto, int cpu, int gpu, int mem) {
-    int encontrado = reiniciar_timestamp(ip, puerto, tabla_nodos);
-    if (encontrado) {
-        // EL NODO EXISTE, SOLO SE REINICIA EL TIMESTAMP
-        return;     
+    // 1. Armamos el objeto falso de búsqueda
+    struct nodo_ busqueda;
+    strncpy(busqueda.ip, ip, (sizeof(busqueda.ip) - 1));
+    busqueda.ip[sizeof(busqueda.ip) - 1] = '\0';
+    busqueda.puerto = puerto;
 
+    // 2. Buscamos en el diccionario
+    Nodo encontrado = tablahash_buscar(tabla_nodos->tabla, &busqueda);
+
+    if (encontrado) {
+        // EL NODO EXISTE: Actualizamos latido Y RECURSOS
+        encontrado->ultimo_anuncio = time(NULL);
+        encontrado->cpu = cpu;
+        encontrado->gpu = gpu;
+        encontrado->mem = mem;
     } else {
         // ES UN NODO NUEVO
-        
-        // Usamos tus funciones originales para crearlo e insertarlo
         Nodo nuevo = crear_nodo(ip, puerto, cpu, gpu, mem);
         agregar_nodo(nuevo, tabla_nodos);
     }
