@@ -3,8 +3,6 @@
          solicitudNodos/1, solicitudTrabajo/3, liberarTrabajo/2, estadoTrabajo/2,
          recibirRespuesta/2, procesarMensaje/1]).
 
-% COMIENZO DE CONEXION Y FINALIZACION-------------------------------------------
-
 % Dada la direccion IP y el puerto, la funcion inicia la conexion
 % al agente de C y devuelve el Socket si tiene exito.
 empezarConexion(Direccion, Puerto) ->
@@ -14,16 +12,13 @@ empezarConexion(Direccion, Puerto) ->
   case gen_tcp:connect(Direccion, Puerto, Opciones) of
     {ok, Socket} ->
       {okConnect, Socket};
-    {error, Reason} ->
-      {errorConnect, Reason}
+    {error, Razon} ->
+      {errorConnect, Razon}
   end.
 
 % Dado el socket del agente de C, la funcion termina la conexion.
 terminarConexion(Socket) ->
   gen_tcp:close(Socket).
-
-% SOLICITUDES AL AGENTE---------------------------------------------------------
-
 
 % Pide al agente C la lista de nodos participantes en la red.
 solicitudNodos(Socket) ->
@@ -52,9 +47,6 @@ estadoTrabajo(Socket, JobId) ->
   Mensaje = io_lib:format("JOB_STATUS ~w\n", [JobId]),
   gen_tcp:send(Socket, Mensaje).
 
-% RESPUESTA DEL AGENTE---------------------------------------------------------
-
-
 % Dado el socket del agente y el pid del scheduler propiamente dicho, la 
 % funcion espera las respuestas del agente de C.
 recibirRespuesta(Socket, PidScheduler) ->
@@ -69,7 +61,7 @@ recibirRespuesta(Socket, PidScheduler) ->
       PidScheduler ! Resultado, % Al scheduler le enviamos el resultado
       recibirRespuesta(Socket, PidScheduler);
     {error, Reason} ->
-      PidScheduler ! {errorRecv, Reason}
+      PidScheduler ! {errorRecvAgente, Reason}
   end.
 
 % Dada la lista de tokens, la funcion evalua el comando y devuelve cual fue la
@@ -93,5 +85,5 @@ procesarMensaje(Tokens) ->
       
     ComandoDesconocido ->
       % Cualquier lista que no coincida con los formatos esperados.
-      {desconocido, ComandoDesconocido}
+      {comandoDesconocido, ComandoDesconocido}
   end.

@@ -1,115 +1,109 @@
 -module(scheduler).
--export([iniciarScheduler/1]).
+-export([iniciar/2, loopActualizadorNodos/1]).
 
-iniciarScheduler(Socket) ->
+% Dado el socket del agente de C y el pid del main, la funcion inicia el 
+% scheduler, este espera a que este creado el oyente del agente de C.
+iniciar(Socket, PidMain) ->
   receive
     arrancar ->
       tcpClient:solicitudNodos(Socket),
-      loopScheduler(Socket, [], {0,0,0}, #{})
+      % Si el scheduler muere, el generador de trabajos y el actualizador
+      % tambien.
+      spawn_link(jobWorker, loopGeneradorTrabajos, [self()]),
+      spawn_link(?MODULE, loopActualizadorNodos, [self()]),
+      loopScheduler(Socket, [], {0,0,0}, #{}, PidMain)
   end.
 
-% Estado: Socket, ListaNodos, RecursosTotales {Cpu,Mem,Gpu}, #{JobId => WorkerPid}
-loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso) ->
+% Dado el Pid del scheduler la funcion pide la lista de nodos cada 15 segundos 
+% para mantener el cluster actualizado.
+loopActualizadorNodos(PidScheduler) ->
+  timer:sleep(15000),
+  PidScheduler ! actualizarNodos,
+  loopActualizadorNodos(PidScheduler).
+
+% La funcion maneja todo el ciclo de vida del scheduler.
+% Estado: ListaNodos, RecursosTotales {Cpu,Mem,Gpu}, #{JobId => WorkerPid}
+loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso, PidMain) ->
   receive
+    % Interaccion con nodos:
+    actualizarNodos ->
+      tcpClient:solicitudNodos(Socket),
+      loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso, PidMain);
+
     {nodos, StrNodos} ->
-      case parseoNodos(StrNodos) of
+      case manejoRecursos:parsearNodos(StrNodos) of
         error ->
-          io:format("Error al parsear nodos.~n"),
-          loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso);
+          loggerScheduler:log("Error en el parseo de nodos, usamos la lista vieja."),
+          loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso, PidMain);
         {ok, ListaParseada} ->
-          Totales = calcularTotales(ListaParseada),
-          io:format("Nodos parseados: ~w~n", [ListaParseada]),
-          erlang:send_after(1000, self(), generar_trabajo),
-          loopScheduler(Socket, ListaParseada, Totales, JobsEnCurso)
+          Totales = manejoRecursos:calcularRecursosTotales(ListaParseada),
+          loopScheduler(Socket, ListaParseada, Totales, JobsEnCurso, PidMain)
       end;
 
-    generar_trabajo when ListaNodos =:= [] ->
-      io:format("Sin nodos disponibles, ignorando generacion de trabajo.~n"),
-      loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso);
-
-    generar_trabajo ->
-      JobId = erlang:unique_integer([positive, monotonic]),
-      WorkerPid = spawn(job_worker, iniciar, [Socket, JobId, self(), RecursosTotales]),
-      erlang:send_after(3000, self(), generar_trabajo),
-      loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso#{JobId => WorkerPid});
+    % Interacciones con el trabajo simulado:
+    generarTrabajo ->
+      case ListaNodos of
+        [] -> 
+          loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso, PidMain);
+        _  ->
+          case RecursosTotales of
+            {0,0,0} -> % Si no hay recursos o la lista es vacia ignoramos.
+              loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso, PidMain);
+            _ ->
+              JobId = erlang:unique_integer([positive, monotonic]),
+              WorkerPid = spawn(jobWorker, iniciarJobWorker, 
+                                [Socket, JobId, self(), RecursosTotales]),
+              loopScheduler(Socket, ListaNodos, RecursosTotales, 
+                            JobsEnCurso#{JobId => WorkerPid}, PidMain)
+          end
+      end;
 
     % El worker manda {CantCpu, CantMem, CantGpu} en el orden convenido.
-    {solicitar_recursos, JobId, {CantCpu, CantMem, CantGpu}} ->
-      case asignarNodos({CantCpu, CantMem, CantGpu}, ListaNodos) of
+    {solicitarRecursos, JobId, {CantCpu, CantMem, CantGpu}} ->
+      case manejoRecursos:asignarNodos({CantCpu, CantMem, CantGpu}, ListaNodos) of
         [] ->
-          rutear(JobId, {denied, JobId}, JobsEnCurso);
+          enviarMensajeJob(JobId, {denied, JobId}, JobsEnCurso);
         ReqsConcretos ->
           tcpClient:solicitudTrabajo(Socket, JobId, ReqsConcretos)
       end,
-      loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso);
+      loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso, PidMain);
 
+    {jobTerminado, JobId} ->
+      loopScheduler(Socket, ListaNodos, RecursosTotales, 
+                    maps:remove(JobId, JobsEnCurso), PidMain);
+
+    % Respuestas desde el agente de C:
     {granted, JobId} ->
-      rutear(JobId, {granted, JobId}, JobsEnCurso),
-      loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso);
+      enviarMensajeJob(JobId, {granted, JobId}, JobsEnCurso),
+      loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso, PidMain);
 
     {denied, JobId} ->
-      rutear(JobId, {denied, JobId}, JobsEnCurso),
-      loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso);
+      enviarMensajeJob(JobId, {denied, JobId}, JobsEnCurso),
+      loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso, PidMain);
 
     {timeout, JobId} ->
-      rutear(JobId, {timeout, JobId}, JobsEnCurso),
-      loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso);
+      enviarMensajeJob(JobId, {timeout, JobId}, JobsEnCurso),
+      loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso, PidMain);
 
-    {job_terminado, JobId} ->
-      loopScheduler(Socket, ListaNodos, RecursosTotales, maps:remove(JobId, JobsEnCurso))
+    {comandoDesconocido, StrComando} ->
+      Str = io_lib:format("Comando desconocido del agente: ~s", [StrComando]),
+      loggerScheduler:log(Str),
+      loopScheduler(Socket, ListaNodos, RecursosTotales, JobsEnCurso, PidMain);
+
+    {errorRecvAgente, Razon} ->
+      % Se cayo la conexion con el oyente, terminamos el programa
+      PidMain ! {cerrarSistema, Razon}
   end.
 
-rutear(JobId, Mensaje, JobsEnCurso) ->
+% Dado el identificador del trabajo (JobId), un mensaje y el mapa de trabajos 
+% en curso (JobsEnCurso), la funcion busca el PID del proceso trabajador 
+% asociado a ese JobId y le reenvia el mensaje. Si no lo encuentra, loguea
+% que el trabajo es ausente.
+enviarMensajeJob(JobId, {Tipo, JobId} = Mensaje, JobsEnCurso) ->
   case maps:find(JobId, JobsEnCurso) of
-    {ok, Pid} -> Pid ! Mensaje;
-    error     -> io:format("Respuesta para Job desconocido: ~w~n", [JobId])
+    {ok, Pid} -> 
+      Pid ! Mensaje;
+    error -> 
+      Str = io_lib:format("Ignorando ~p: Job ~w ausente", [Tipo, JobId]),
+      loggerScheduler:log(Str)
   end.
-
-calcularTotales(ListaNodos) ->
-  lists:foldl(fun({_IP, _Puerto, {Cpu, Mem, Gpu}}, {AccCpu, AccMem, AccGpu}) ->
-    {AccCpu + Cpu, AccMem + Mem, AccGpu + Gpu}
-  end, {0, 0, 0}, ListaNodos).
-
-% Dado {CantCpu, CantMem, CantGpu}, para cada posicion no-cero busca un nodo
-% con suficiente capacidad y lo asigna al azar.
-% Devuelve [{IP, "cpu"|"mem"|"gpu", Cantidad}] para solicitudTrabajo.
-
-%CORREGIR, si pido 7 de cpu y tengo 2 maquinas con 5 y 5 no crea la solicitud, Candidatos = []
-asignarNodos({CantCpu, CantMem, CantGpu}, ListaNodos) ->
-  asignarRecurso("cpu", CantCpu, fun({_,_,{Max,_,_}}) -> Max end, ListaNodos) ++
-  asignarRecurso("mem", CantMem, fun({_,_,{_,Max,_}}) -> Max end, ListaNodos) ++
-  asignarRecurso("gpu", CantGpu, fun({_,_,{_,_,Max}}) -> Max end, ListaNodos).
-
-asignarRecurso(_Tipo, 0, _GetMax, _ListaNodos) -> [];
-asignarRecurso(Tipo, Cantidad, GetMax, ListaNodos) ->
-  Candidatos = [IP || {IP, _Puerto, _} = Nodo <- ListaNodos, GetMax(Nodo) >= Cantidad],
-  case Candidatos of
-    [] -> [];
-    _  ->
-      IP = lists:nth(rand:uniform(length(Candidatos)), Candidatos),
-      [{IP, Tipo, Cantidad}]
-  end.
-
-% Dado "IP:PUERTO:res1:val1:res2:val2:...;...", devuelve
-% {ok, [{IP, Puerto, {Cpu, Mem, Gpu}}]} o error.
-parseoNodos(StrNodos) ->
-  NodosStr = string:tokens(StrNodos, ";"),
-  try
-    Lista = [parsearNodo(N) || N <- NodosStr],
-    {ok, Lista}
-  catch
-    _:_ -> error
-  end.
-
-parsearNodo(NodoStr) ->
-  [IP, PuertoStr | RecursosTokens] = string:tokens(NodoStr, ":"),
-  {IP, list_to_integer(PuertoStr), parsearRecursos(RecursosTokens)}.
-
-% Construye {Cpu, Mem, Gpu} desde los tokens, usando 0 para recursos ausentes.
-parsearRecursos(Tokens) ->
-  Mapa = parsearRecursosMap(Tokens, #{}),
-  {maps:get("cpu", Mapa, 0), maps:get("mem", Mapa, 0), maps:get("gpu", Mapa, 0)}.
-
-parsearRecursosMap([], Acc) -> Acc;
-parsearRecursosMap([Tipo, CantStr | Resto], Acc) ->
-  parsearRecursosMap(Resto, Acc#{Tipo => list_to_integer(CantStr)}).
