@@ -1,7 +1,7 @@
 -module(scheduler).
 -export([iniciar/2, loopActualizadorNodos/1]).
 
--define(MAX_JOBS, 10).
+-include("../../include/config.hrl").
 
 % Dado el socket del agente de C y el pid del main, la funcion inicia el 
 % scheduler, este espera a que este creado el oyente del agente de C.
