@@ -35,6 +35,7 @@ void desconectar(TablaNodos tabla_nodos);
 
 char* get_nodes(TablaNodos tabla_nodos);
 
+int buscar_nodo(char* ip, int puerto, TablaNodos tabla_nodos);
 
 void procesar_anuncio(TablaNodos tabla_nodos, char* ip, int puerto, int cpu, int gpu, int mem);
 

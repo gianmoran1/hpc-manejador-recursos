@@ -189,3 +189,13 @@ char* get_nodes(TablaNodos tabla_nodos) {
     // Este string debe ser liberado con free() después de enviarlo por el socket
     return buffer;
 }
+
+int buscar_nodo(char* ip, int puerto, TablaNodos tabla_nodos){
+    struct nodo_ busqueda;
+    strncpy(busqueda.ip, ip, (sizeof(busqueda.ip) - 1));
+    busqueda.ip[sizeof(busqueda.ip) - 1] = '\0';
+    busqueda.puerto = puerto;
+
+    Nodo encontrado = tablahash_buscar(tabla_nodos->tabla, &busqueda);
+    return encontrado != NULL;
+}
