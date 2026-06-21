@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/select.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <fcntl.h> /* For O_* constants */
@@ -18,22 +19,20 @@
 #include <sys/epoll.h>
 #include <signal.h>
 #include <arpa/inet.h>
+#include <errno.h>
 #include "Sockets.h"
 #include "gestor_estado.h"
-#include <errno.h>
 
 
 
 /*
  * Para probar, nos conectamos con: 
  * Simulando el cliente de erlang por nc localhost <puerto>
+ *  nc 127.0.0.1 4040
  * Simulando otro nodo C por nc <ip_local> <puerto>
- * Simulando un ANNOUNCE por echo "ANNOUNCE 192.168.
+ *  nc 172.23.98.120 4040
+ * Simulando un ANNOUNCE por echo "ANNOUNCE 10.0.0.5 4040 gpu:1" | nc -u -w1 127.0.0.1 12529
   */
-
-
-
-
 
 
 
@@ -45,6 +44,8 @@ int usock_udp;
 int erlangSocket = -1;
 int timer_anuncios_fd;
 char mi_ip_publica[16]; // Para guardar mi IP pública y usarla en los anuncios
+
+
 
 typedef struct {
     int fd;                 // El socket del cliente
@@ -67,6 +68,38 @@ void parsear_mensaje_red_c(int fd, char* msg) {
 
 
 
+ClienteConectado* crear_cliente_conectado(int fd, int es_erlang) {
+    ClienteConectado *cliente = malloc(sizeof(ClienteConectado));
+    cliente->fd = fd;
+    cliente->es_erlang = es_erlang;
+    cliente->bytes_leidos = 0;
+    memset(cliente->buffer, 0, sizeof(cliente->buffer));
+    return cliente;
+}
+
+void agregar_lsock_a_epoll(int lsock) {
+    struct epoll_event ev;
+    ev.events = EPOLLIN | EPOLLEXCLUSIVE;
+    ev.data.fd = lsock;
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, lsock, &ev) == -1){
+        perror("epoll_ctl: listen_sock");
+        exit(EXIT_FAILURE);
+    }
+}
+
+void agregar_csock_a_epoll(ClienteConectado *cliente) {
+    struct epoll_event ev_cliente;
+    ev_cliente.events = EPOLLIN | EPOLLONESHOT;
+    ev_cliente.data.ptr = cliente; 
+    
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cliente->fd, &ev_cliente) == -1) {
+        perror("Error al agregar cliente al epoll");
+        close(cliente->fd);
+        exit(EXIT_FAILURE);
+    }
+    return;
+}
+
 void aceptar_cliente(int fd_listo) {
     
     // Hay un nuevo cliente queriendo entrar. ¡Vamos a abrirle la puerta!
@@ -83,29 +116,13 @@ void aceptar_cliente(int fd_listo) {
     
     // Convierto el nuevo socket a no bloqueante
     set_nonblocking(conn_sock);
-
-    ClienteConectado *nuevo_cliente = malloc(sizeof(ClienteConectado));
-    nuevo_cliente->fd = conn_sock;
-    nuevo_cliente->es_erlang = (fd_listo == lsock_local) ? 1 : 0;
-    nuevo_cliente->bytes_leidos = 0;
-    memset(nuevo_cliente->buffer, 0, sizeof(nuevo_cliente->buffer));
-
-    // Lo agregamos al epoll PARA LEER DATOS.
-    struct epoll_event ev_cliente;
-    ev_cliente.events = EPOLLIN | EPOLLONESHOT;
-    ev_cliente.data.ptr = nuevo_cliente; // <--- EL TRUCO DE LA PROFE
+    ClienteConectado *clienteNuevo = crear_cliente_conectado(conn_sock, (fd_listo == lsock_local) ? 1 : 0);
+    agregar_csock_a_epoll(clienteNuevo);
     
-    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, conn_sock, &ev_cliente) == -1) {
-        perror("Error al agregar cliente al epoll");
-        close(conn_sock);
-        exit(EXIT_FAILURE);
-    } else {
-        if (fd_listo == lsock_local) { erlangSocket = conn_sock; 
-            printf("¡Nueva conexión local aceptada para Erlang! (FD asignado: %d)\n", conn_sock);
-        } else 
-        printf("¡Nueva conexión de red aceptada! (FD asignado: %d)\n", conn_sock);
-    }
-    
+    if (fd_listo == lsock_local) { erlangSocket = conn_sock; 
+        printf("¡Nueva conexión local aceptada para Erlang! (FD asignado: %d)\n", conn_sock);
+    } else 
+    printf("¡Nueva conexión de red aceptada! (FD asignado: %d)\n", conn_sock);
 }
 
 
@@ -139,7 +156,6 @@ void procesar_mensajes_en_buffer(ClienteConectado *cliente) {
         cliente->buffer[cliente->bytes_leidos] = '\0';
     }
 }
-
 
 void atender_cliente_tcp(ClienteConectado *cliente) {
     ssize_t bytes_recibidos;
@@ -196,14 +212,39 @@ void atender_cliente_tcp(ClienteConectado *cliente) {
     procesar_mensajes_en_buffer(cliente);
 
     // Rearmo el epoll, vuelvo a vigilar el socket
-    struct epoll_event ev;
-    ev.events = EPOLLIN | EPOLLONESHOT;
-    ev.data.ptr = cliente; 
-    
-    if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, cliente->fd, &ev) == -1) {
-        perror("Error rearmando epoll_ctl_mod");
-    }
+    agregar_csock_a_epoll(cliente);
+
 }
+
+// Devuelve 1 si hay un mensaje listo en 'buffer_destino', o 0 si no hay nada.
+int atender_cliente_udp(int usock_udp, char *buffer_destino, size_t tamaño_maximo) {
+    char buffer_red[512]; // Un temporal cortito solo para sacar los datos del enchufe
+    struct sockaddr_in src_addr;
+    socklen_t src_len = sizeof(src_addr);
+
+    ssize_t bytes_recibidos = recvfrom(usock_udp, buffer_red, sizeof(buffer_red) - 1, 0, (struct sockaddr *)&src_addr, &src_len);
+    
+    if (bytes_recibidos <= 0) {
+        // Red vacía o error, avisamos que no hay nada
+        return 0; 
+    }
+
+    buffer_red[bytes_recibidos] = '\0'; 
+    
+    char ip_remitente[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &(src_addr.sin_addr), ip_remitente, INET_ADDRSTRLEN);
+
+    // Si es nuestro propio eco, avisamos que no hay nada interesante
+    if (strcmp(ip_remitente, mi_ip_publica) == 0) return 0;
+    
+    // --- LA MAGIA ACÁ ---
+    // Escribimos el resultado directamente en la variable del llamador
+    snprintf(buffer_destino, tamaño_maximo, "%s %s", ip_remitente, buffer_red);
+
+    // ¡Avisamos que el buffer destino ya tiene texto útil!
+    return 1; 
+}
+
 
 
 // SI HACEMOS 4 HILOS, ESTA (CON OTRO NOMBRE) SERA LA FUNCION LLAMADA EN PTHREAD_CREATE PARA QUE CADA HILO EJECUTE EL BUCLE PRINCIPAL DE ATENCION DE EVENTOS DEL EPOLL.
@@ -234,42 +275,18 @@ void* bucle_principal(void* args) {
 
             // si es un mensaje UDP, es porque algún nodo de la red se está anunciando con un ANNOUNCE.
             else if (fd_listo == usock_udp) {
-
-                // ¡Llegó un datagrama UDP! (Probablemente un ANNOUNCE)
-                char buffer_udp[1024]; 
-                struct sockaddr_in remitente_addr;
-                socklen_t remitente_len = sizeof(remitente_addr);
-                
-                // Leemos el mensaje directamente del socket
-                ssize_t bytes_leidos = recvfrom(usock_udp, buffer_udp, sizeof(buffer_udp) - 1, 0, 
-                                               (struct sockaddr*)&remitente_addr, &remitente_len);
-                
-                if (bytes_leidos > 0) {
-
-
-                    // Habria que chequear que el mensaje tenga sentido antes de procesarlo, 
-                    // que sea un mensaje ANNOUNCE correcto. De ser asi, extraigo la ip y sus recursos anunciados y se los paso a Santos para que actualice su tabla de nodos.
-                    // Bloque de prueba asumiendo que siempre llega ANNOUNCE correcto, para ver que se reciben los mensajes y de quien vienen. 
-                    // Después habría que hacer el parseo real del mensaje y procesarlo acorde a lo que diga
-                    
-                    
-                    
-                    // Agregamos el fin de cadena (\0) para poder imprimirlo seguro en C
-                    buffer_udp[bytes_leidos] = '\0'; 
-                    
-                    char ip_remitente[INET_ADDRSTRLEN];
-                    // Extraemos la IP del nodo que nos gritó el ANNOUNCE para saber quién fue
-                    inet_ntop(AF_INET, &(remitente_addr.sin_addr), ip_remitente, INET_ADDRSTRLEN);
-                    
-                    // Somos nosotros mismos. Ignoramos el mensaje y volvemos al epoll.
-                    if (strcmp(ip_remitente, mi_ip_publica) == 0) continue; 
-                    
-                    printf("¡ANNOUNCE UDP recibido desde %s! Mensaje: %s\n", ip_remitente, buffer_udp);
-                    
-                    // Por ultimo aca llamo a la función de Santos:
-                    // santos_actualizar_tabla_nodos(ip_remitente, recuros, buffer_udp);
-                    // ENVIO MENSAJE A SANTOS PARA QUE ACTUALICE SU TABLA DE NODOS CON ESTE NUEVO NODO QUE SE ANUNCIA
+                char buffer_udp[1024];
+                int valido = atender_cliente_udp(usock_udp, buffer_udp, sizeof(buffer_udp));
+                // valido = parsearlo
+                if (!valido) {
+                    // No había nada útil, seguimos esperando
+                    continue;
                 }
+                printf("¡ANNOUNCE UDP recibido Mensaje: %s\n", buffer_udp);
+
+            // santos_actualizar_tabla_nodos(ip_remitente, recuros, buffer_udp);
+            // ENVIO MENSAJE A SANTOS PARA QUE ACTUALICE SU TABLA DE NODOS CON ESTE NUEVO NODO QUE SE ANUNCIA
+                
             } 
 
 
@@ -282,12 +299,12 @@ void* bucle_principal(void* args) {
                 // OJO: En la versión final, los recursos los sacás de variables dinámicas
                 char msj[256];
                 // msj = pedir_recursos_disponibles(); // ACA PEDIS LOS RECURSOS DISPONIBLES ACTUALES PARA ANUNCIARLOS EN EL MENSAJE
-                sprintf(msj, "ANNOUNCE %s %d cpu:4 mem:8192\n", mi_ip_publica, PUERTO);
+                sprintf(msj, "ANNOUNCE %s %d cpu:4 mem:8192\n", mi_ip_publica, PUERTO_TCP);
 
                 // Armo la informacion destino: 255.255.255.255 (A todos en la red local)
                 struct sockaddr_in dest;
                 dest.sin_family = AF_INET;
-                dest.sin_port = htons(PUERTO);
+                dest.sin_port = htons(PUERTO_UDP);
                 dest.sin_addr.s_addr = inet_addr("255.255.255.255"); 
 
                 // Enviamos el broadcast
@@ -327,6 +344,8 @@ void* bucle_principal(void* args) {
     return NULL;
 }
 
+
+
 int main() {
 
     signal(SIGPIPE, SIG_IGN);
@@ -344,62 +363,30 @@ int main() {
 	}
 
     // Creo los tres sockets de escucha
-    lsock_publico = mk_tcp_server(PUERTO, mi_ip_publica); // is_local = 0
-    lsock_local   = mk_tcp_server(PUERTO, "127.0.0.1"); // is_local = 1
-    usock_udp     = mk_udp_server(PUERTO);
-
-    // Registro los tres sockets en el epoll
-    struct epoll_event ev;
-
-    // agrego el socket TCP de red
-    ev.events = EPOLLIN;
-    ev.data.fd = lsock_publico;
-    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, lsock_publico, &ev) == -1 ){
-		perror("epoll_ctl: listen_sock_TCP_red");
-        exit(EXIT_FAILURE);
-	}
-
-	// agrego el socket TCP local
-    ev.events = EPOLLIN;
-    ev.data.fd = lsock_local;
-    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, lsock_local, &ev) == -1){
-		perror("epoll_ctl: listen_sock_TCP_local");
-        exit(EXIT_FAILURE);
-	}
-
-	// agrego el socket UDP
-    ev.events = EPOLLIN;
-    ev.data.fd = usock_udp;
-    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, usock_udp, &ev) == -1){
-		perror("epoll_ctl: listen_sock_UDP");
-        exit(EXIT_FAILURE);
-	}
-
+    lsock_publico = mk_tcp_lsock(PUERTO_TCP, mi_ip_publica); // is_local = 0
+    lsock_local   = mk_tcp_lsock(PUERTO_TCP, "127.0.0.1"); // is_local = 1
+    usock_udp     = mk_udp_lsock(PUERTO_UDP);
     timer_anuncios_fd = mk_timer(5); // Avisame cada 5 segundos
+    
+    // Registro los sockets de entrada y el timer en el epoll
+    agregar_lsock_a_epoll(lsock_publico);
+    agregar_lsock_a_epoll(lsock_local);
+    agregar_lsock_a_epoll(usock_udp);
+    agregar_lsock_a_epoll(timer_anuncios_fd);
 
-    ev.events = EPOLLIN;
-    ev.data.fd = timer_anuncios_fd;
-    epoll_ctl(epoll_fd, EPOLL_CTL_ADD, timer_anuncios_fd, &ev);
+    printf("Servidor HPC iniciado. Escuchando en puerto %d...\n", PUERTO_TCP);
 
-    printf("Servidor HPC iniciado. Escuchando en puerto %d...\n", PUERTO);
-
-
-    // Por ahora, el mismo hilo principal atiende todo.
-    // Después lo podemos cambiar para que cada hilo ejecute esta función y así tener 4 hilos atendiendo eventos en paralelo.
-    bucle_principal(NULL);  
-
-    // LOGICA POR SI IMPLEMENTAMOS USAR 4 HILOS FIJOS QUE ATIENDAN TODOS LOS EVENTOS QUE PASAN
 
     // // Inicio los 4 hilos trabajadores
-    // pthread_t hilos[4];
-    // for (int i = 0; i < 4; i++) {
-    //     pthread_create(&hilos[i], NULL, trabajador_epoll, NULL);
-    // }
+    pthread_t hilos[4];
+    for (int i = 0; i < 4; i++) {
+        pthread_create(&hilos[i], NULL, bucle_principal, NULL);
+    }
 
-    // // Espero a que terminen (bucle infinito)
-    // for (int i = 0; i < 4; i++) {
-    //     pthread_join(hilos[i], NULL);
-    // }
+    // Espero a que terminen (bucle infinito)
+    for (int i = 0; i < 4; i++) {
+        pthread_join(hilos[i], NULL);
+    }
 
     return 0;
 }

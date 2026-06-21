@@ -18,9 +18,12 @@
 #include <arpa/inet.h>
 #include <sys/timerfd.h> /* Para timerfd_create */
 #include <time.h>
+#include <errno.h>
+
 
 #define MAX_EVENTS 10
-#define PUERTO 4040
+#define PUERTO_TCP 4040
+#define PUERTO_UDP 12529
 
 void quit(char *s);
 
@@ -28,11 +31,13 @@ void obtener_mi_ip_local(char *buffer_ip);
 
 int set_nonblocking(int fd);
 
-int mk_tcp_server(int port, const char* ip);
+int mk_tcp_lsock(int port, const char* ip);
 
-int mk_udp_server(int port);
+int mk_udp_lsock(int port);
 
 int mk_timer(int segundos);
+
+int conectar_a_nodo(const char *ip_destino, int puerto_destino);
 
 
 
