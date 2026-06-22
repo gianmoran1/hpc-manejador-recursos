@@ -49,7 +49,7 @@ void registrar_asignacion(TablaJobs tabla_jobs, int job_id, int socket, char* re
     JobActivo job = (JobActivo)tablahash_buscar(tabla_jobs->tabla, &busqueda);
 
     if (job == NULL) {
-        // Primera vez que este trabajo pide algo, creamos su ficha
+        // Primera vez que este trabajo pide algo, lo creamos
         job = malloc(sizeof(struct jobActivo_));
         job->job_id = job_id;
         job->socket_origen = socket;
@@ -61,7 +61,7 @@ void registrar_asignacion(TablaJobs tabla_jobs, int job_id, int socket, char* re
         tabla_jobs->lista = glist_agregar_inicio(tabla_jobs->lista, job, job_no_copia);
     }
 
-    // Anotamos la nueva deuda en su cuenta
+    // asignamos los recursos
     if (strcmp(recurso, "cpu") == 0) job->cpu_usada += cantidad;
     else if (strcmp(recurso, "gpu") == 0) job->gpu_usada += cantidad;
     else if (strcmp(recurso, "mem") == 0) job->mem_usada += cantidad;
@@ -89,7 +89,7 @@ int registrar_liberacion(TablaJobs tabla_jobs, int job_id, char* recurso, int ca
         return 0;
     }
 
-    // Si el trabajo quedó sin deudas, eliminarlo
+    // Si el trabajo ya no consume recursos lo eliminamos.
     if (job->cpu_usada == 0 && job->gpu_usada == 0 && job->mem_usada == 0) {
         /*eliminamos primero el puntero de la lista, luego destruimos el job de la tabla*/
         GList temp = tabla_jobs->lista;
@@ -126,7 +126,7 @@ void liberar_recursos_socket(TablaJobs tabla_jobs, int socket_caido, void (*libe
 
 
     
-    // 1. Limpiamos las cabezas que pertenezcan al socket caído
+    // 1. Liberamos los trabajos que pertenezcan al socket caido
     while (temp != NULL) {
         JobActivo job = (JobActivo)temp->data;
         if (job->socket_origen == socket_caido) {
@@ -157,7 +157,7 @@ void liberar_recursos_socket(TablaJobs tabla_jobs, int socket_caido, void (*libe
                 total_gpu_liberada += job->gpu_usada;
                 total_mem_liberada += job->mem_usada;
 
-                tablahash_eliminar(tabla_jobs->tabla, job);
+                tablahash_eliminar(tabla_jobs->tabla, job); //tambien la eliminamos de la tabla.
                 free(temp->next);
                 temp->next = next;
             } else {
