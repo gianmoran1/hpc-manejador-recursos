@@ -1,8 +1,7 @@
 #include "Sockets.h"
 
 
-extern char mi_ip_publica[16]; // Para guardar mi IP pública y usarla en los anuncios
-;
+extern char mi_ip_publica[16];
 
 
 

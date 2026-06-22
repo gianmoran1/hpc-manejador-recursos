@@ -1,6 +1,6 @@
 -define(MAX_DELAY_BACKOFF, 30000).
 -define(INIT_DELAY_BACKOFF, 1000).
--define(PUERTO, 8080).
+-define(PUERTO, 4040).
 -define(IPLOCAL, "127.0.0.1").
 
 -define(TIEMPO_ACTUALIZACION_NODOS, 15000).
