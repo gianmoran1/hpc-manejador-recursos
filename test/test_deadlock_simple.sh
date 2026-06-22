@@ -1,236 +1,127 @@
 #!/bin/bash
-# test_deadlock_simple.sh — Prueba concisa de la estrategia anti-deadlock
+# test_deadlock_simple.sh — Prueba de la estrategia anti-deadlock usando funciones C directas
 #
 # Escenario:
-#   AgA pide gpu:1 en AgB. La GPU está ocupada (Job 9000) → RESERVE encolado.
-#   Tras 6 s, gestor_expirar_pedidos dispara JOB_TIMEOUT al solicitante.
-#   AgA reenvía JOB_TIMEOUT a Erlang. Erlang libera GPU y reintenta → JOB_GRANTED.
-#
-# Arquitectura:
-#   [nc sat]  → AgB:PUB_IP:4042  (socket de red → gestor_manejar_reserva)
-#   [/dev/tcp] → AgA:127.0.0.1:4040 (socket Erlang local)
-#   socat bridge: 127.0.0.2:4040 → PUB_IP:4042  (simula AgB en otra IP)
+#   Job 9000 satura gpu:1 del gestor             → GRANTED (resultado 1)
+#   Job 1001 pide gpu:1 con GPU ocupada           → encolado (resultado 0)
+#   gestor_expirar_pedidos detecta el vencimiento → callback JOB_TIMEOUT al socket 10
+#   Job 9000 liberado, Job 1001 reintenta         → GRANTED (deadlock resuelto)
 
 set -uo pipefail
 
 SRC="$(cd "$(dirname "$0")/.." && pwd)/src/c-agent"
 BUILD="/tmp/hpc_simple"
-PORT_A=4040
-PORT_B=4042
-PASS=0; FAIL=0; PIDS=()
+PASS=0; FAIL=0
 
 ok()   { echo "  [OK]   $*"; ((PASS++)) || true; }
 fail() { echo "  [FAIL] $*"; ((FAIL++)) || true; }
-trap 'kill "${PIDS[@]}" 2>/dev/null; wait 2>/dev/null' EXIT
 
 # ══════════════════════════════════════════════════════════════════
-# 1. COMPILAR — parchear el código fuente y compilar AgA y AgB
+# 1. ESCRIBIR Y COMPILAR EL PROGRAMA DE TEST C
 # ══════════════════════════════════════════════════════════════════
 echo "=== Compilando ==="
-mkdir -p "$BUILD/a" "$BUILD/b"
-for d in a b; do
-    cp "$SRC"/*.c "$SRC"/*.h "$BUILD/$d/"
-done
+mkdir -p "$BUILD"
 
-python3 - "$BUILD" <<'PATCHER'
-import sys
-BUILD = sys.argv[1]
+cat > "$BUILD/test_deadlock.c" << 'CTEST'
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "gestor_estado.h"
 
-def patch(path, old, new):
-    txt = open(path).read()
-    if old not in txt:
-        print(f"  ERROR: anchor no encontrado en {path}"); sys.exit(1)
-    open(path, 'w').write(txt.replace(old, new, 1))
+/* ── Callbacks que registran lo que se "enviaría" por red ── */
+static int ultimo_timeout_job  = -1;
+static int ultimo_timeout_sock = -1;
+static int ultimo_granted_job  = -1;
+static int ultimo_granted_sock = -1;
 
-# ── Código C a insertar ──────────────────────────────────────────────────────
-
-# Callback que gestor_expirar_pedidos invoca cuando un pedido caduca:
-# le envía JOB_TIMEOUT al socket que originó el RESERVE (el agente solicitante)
-CALLBACK = '''\
-static void avisar_timeout_red(int job_id, int socket_origen) {
-    char msj[64];
-    snprintf(msj, sizeof(msj), "JOB_TIMEOUT %d\\n", job_id);
-    enviar_mensaje_tcp(socket_origen, msj);
+static void cb_timeout(int job_id, int sock) {
+    printf("  [NET] JOB_TIMEOUT %d -> socket %d\n", job_id, sock);
+    ultimo_timeout_job  = job_id;
+    ultimo_timeout_sock = sock;
 }
 
-'''
+static void cb_granted(int job_id, int sock) {
+    printf("  [NET] GRANTED %d -> socket %d\n", job_id, sock);
+    ultimo_granted_job  = job_id;
+    ultimo_granted_sock = sock;
+}
 
-# Handler del temporizador periódico dentro del bucle de eventos (epoll)
-TIMER_HANDLER = '''\
-            else if (fd_listo == timer_expiracion_fd) {
-                uint64_t exp;
-                read(timer_expiracion_fd, &exp, sizeof(exp));
-                if (estado) gestor_expirar_pedidos(estado, avisar_timeout_red);
-            }
+/* cola_inicio necesita una función de copia; ésta retorna el puntero sin copiar */
+static void* sin_copia(void* d) { return d; }
 
-            // Es un cliente que ya estaba conectado mandando texto'''
+static int pass = 0, fail = 0;
+static void assert_true(int cond, const char *desc) {
+    if (cond) { printf("  [OK]   %s\n", desc); pass++; }
+    else       { printf("  [FAIL] %s\n", desc); fail++; }
+}
 
-# RESERVE original: mock que siempre concede (nunca encola)
-OLD_RESERVE = '''\
-            // Preguntamos a Santos si la compu física tiene esto disponible
-            // int lugar_disponible = santos_intentar_reservar_local(recursos);
-            int lugar_disponible = 1; // MOCK
+int main(void) {
+    printf("=== Escenario anti-deadlock (funciones C directas) ===\n\n");
 
-            char respuesta[64];
-            if (lugar_disponible) {
-                snprintf(respuesta, sizeof(respuesta), "GRANTED %d\\n", job_id);
-            } else {
-                snprintf(respuesta, sizeof(respuesta), "DENIED %d\\n", job_id);
-            }
+    EstadoGlobal estado = estado_crear(4, 1, 8192);
 
-            // Le respondemos directo por el mismo cable por el que nos habló
-            enviar_mensaje_tcp(cliente->fd, respuesta);'''
+    /* ── Paso 1: Job 9000 satura gpu:1 ── */
+    printf("--- Paso 1: Job 9000 satura gpu:1 ---\n");
+    int r = gestor_manejar_reserva(estado, "gpu", 9000, 20, 1);
+    assert_true(r == 1,                        "RESERVE 9000 gpu:1 -> GRANTED");
+    assert_true(estado->gpu->disponible == 0,  "GPU disponible = 0 tras la reserva");
 
-# RESERVE real: usa gestor_manejar_reserva que encola si no hay recursos
-NEW_RESERVE = '''\
-            char nombre_res[32]; int cant_res = 0; int resultado_res = -1;
-            if (sscanf(recursos, "%31[^:]:%d", nombre_res, &cant_res) == 2)
-                resultado_res = gestor_manejar_reserva(estado, nombre_res, job_id, cliente->fd, cant_res);
-            if (resultado_res == 1) {
-                char rsp[64]; snprintf(rsp, sizeof(rsp), "GRANTED %d\\n", job_id);
-                enviar_mensaje_tcp(cliente->fd, rsp);
-            } else if (resultado_res == -1) {
-                char rsp[64]; snprintf(rsp, sizeof(rsp), "DENIED %d\\n", job_id);
-                enviar_mensaje_tcp(cliente->fd, rsp);
-            }
-            // resultado_res == 0: encolado; callback avisará cuando haya recursos'''
+    /* ── Paso 2: Job 1001 pide gpu:1 con GPU ocupada → debe quedar encolado ── */
+    printf("\n--- Paso 2: Job 1001 pide gpu:1 (GPU llena) ---\n");
+    r = gestor_manejar_reserva(estado, "gpu", 1001, 10, 1);
+    assert_true(r == 0,                                    "RESERVE 1001 gpu:1 -> encolado");
+    assert_true(!cola_es_vacia(estado->gpu->pendientes),   "Cola GPU no vacía");
 
-# Nuevo caso en procesar_mensaje_red_c: reenviar JOB_TIMEOUT a Erlang
-OLD_ELSE = '''\
-        else {
-            printf("[CONTROLADOR] Comando de red C ignorado o mal formado: %s\\n", msg);'''
+    /* ── Paso 3: forzar expiración poniendo el timestamp al epoch ── */
+    printf("\n--- Paso 3: expirar pedido (simular timeout) ---\n");
+    SolicitudPendiente sol =
+        (SolicitudPendiente)cola_inicio(estado->gpu->pendientes, sin_copia);
+    if (sol) sol->instante_llegada = 0;  /* epoch → difftime siempre >= TIEMPO_ESPERA */
 
-NEW_ELSE = '''\
-        else if (strcmp(comando, "JOB_TIMEOUT") == 0 && parseados >= 2) {
-            if (erlangSocket != -1) {
-                char s[64]; snprintf(s, 64, "JOB_TIMEOUT %d\\n", job_id);
-                enviar_mensaje_tcp(erlangSocket, s);
-            }
-        }
-        else {
-            printf("[CONTROLADOR] Comando de red C ignorado o mal formado: %s\\n", msg);'''
+    gestor_expirar_pedidos(estado, cb_timeout);
+    assert_true(ultimo_timeout_job  == 1001, "JOB_TIMEOUT disparado para job 1001");
+    assert_true(ultimo_timeout_sock == 10,   "JOB_TIMEOUT enviado al socket correcto (10)");
+    assert_true(cola_es_vacia(estado->gpu->pendientes), "Cola GPU vacía tras expiración");
 
-# ── Aplicar parches a agente A y agente B ───────────────────────────────────
-for d in ['a', 'b']:
-    ag = f"{BUILD}/{d}/Agente.c"
-    co = f"{BUILD}/{d}/controlador.c"
-    ge = f"{BUILD}/{d}/gestor_estado.c"
+    /* ── Paso 4: liberar Job 9000 y reintentar ── */
+    printf("\n--- Paso 4: Job 9000 liberado, Job 1001 reintenta ---\n");
+    gestor_liberar_job(estado, 9000, cb_granted);
+    assert_true(estado->gpu->disponible == 1, "GPU libre tras release de Job 9000");
 
-    # 1. Reducir timeout de 30 s a 6 s
-    patch(ge, '#define TIEMPO_ESPERA 30.0', '#define TIEMPO_ESPERA 6.0')
+    r = gestor_manejar_reserva(estado, "gpu", 1001, 10, 1);
+    assert_true(r == 1,                       "RESERVE 1001 reintento -> GRANTED (deadlock resuelto)");
+    assert_true(estado->gpu->disponible == 0, "GPU ocupada por Job 1001");
 
-    # 2. Agregar include de gestor_estado.h en Agente.c (necesario para estado_crear)
-    src = open(ag).read()
-    if '#include "gestor_estado.h"' not in src:
-        open(ag, 'w').write(src.replace('#include "controlador.h"',
-                                        '#include "controlador.h"\n#include "gestor_estado.h"'))
+    estado_destruir(estado);
 
-    # 3. stdout sin buffer (printf visible en logs al redirigir a archivo)
-    patch(ag, 'signal(SIGPIPE, SIG_IGN);',
-              'signal(SIGPIPE, SIG_IGN);\n    setbuf(stdout, NULL);')
+    printf("\nPasados: %d  |  Fallidos: %d\n", pass, fail);
+    printf(fail == 0 ? "TODOS LOS TESTS PASARON\n" : "ALGUNOS TESTS FALLARON\n");
+    return fail > 0 ? 1 : 0;
+}
+CTEST
 
-    # 4. Declarar timer_expiracion_fd como global (accesible desde bucle_principal)
-    patch(ag, 'int timer_anuncios_fd;',
-              'int timer_anuncios_fd;\nint timer_expiracion_fd;')
-
-    # 5. Inicializar estado y crear el timer de expiración cada 2 s
-    patch(ag, 'epoll_fd = epoll_create1(0);',
-              'epoll_fd = epoll_create1(0);\n    estado = estado_crear(4, 1, 8192);')
-    patch(ag, 'timer_anuncios_fd = mk_timer(5);',
-              'timer_anuncios_fd = mk_timer(5);\n    timer_expiracion_fd = mk_timer(2);')
-    patch(ag, 'agregar_fd_en_epoll(timer_anuncios_fd, EPOLLIN | EPOLLEXCLUSIVE);',
-              'agregar_fd_en_epoll(timer_anuncios_fd, EPOLLIN | EPOLLEXCLUSIVE);\n'
-              '    agregar_fd_en_epoll(timer_expiracion_fd, EPOLLIN | EPOLLEXCLUSIVE);')
-
-    # 6. Insertar callback y handler del timer en el bucle de eventos
-    patch(ag, 'void* bucle_principal(void* args) {',
-              CALLBACK + 'void* bucle_principal(void* args) {')
-    patch(ag, '            // Es un cliente que ya estaba conectado mandando texto',
-              TIMER_HANDLER)
-
-    # 7. Reemplazar mock de RESERVE y agregar handler de JOB_TIMEOUT
-    patch(co, OLD_RESERVE, NEW_RESERVE)
-    patch(co, OLD_ELSE, NEW_ELSE)
-
-# Puerto distinto para agente B
-patch(f"{BUILD}/b/Sockets.h", '#define PUERTO_TCP 4040', '#define PUERTO_TCP 4042')
-patch(f"{BUILD}/b/Sockets.h", '#define PUERTO_UDP 12529', '#define PUERTO_UDP 12531')
-print("  Parches aplicados.")
-PATCHER
-
-SRCS=$(ls "$SRC"/*.c | grep -v test_simulacion | xargs -n1 basename)
-for d in a b; do
-    gcc -g $(for f in $SRCS; do echo "$BUILD/$d/$f"; done) -lpthread \
-        -o "$BUILD/$d/agente" 2>"$BUILD/$d/err.log" \
-        && echo "  Agente $d compilado" \
-        || { echo "ERROR compilando agente $d:"; cat "$BUILD/$d/err.log"; exit 1; }
-done
+SRCS="gestor_estado.c recursos.c jobs.c nodos.c tablahash.c glist.c cola.c"
+gcc -g -I"$SRC" "$BUILD/test_deadlock.c" \
+    $(for f in $SRCS; do echo "$SRC/$f"; done) \
+    -lpthread -o "$BUILD/test_deadlock" 2>"$BUILD/err.log" \
+    && ok "test_deadlock compilado" \
+    || { echo "ERROR compilando:"; cat "$BUILD/err.log"; exit 1; }
 
 # ══════════════════════════════════════════════════════════════════
-# 2. INICIAR — arrancar los dos agentes y el bridge de red
-# ══════════════════════════════════════════════════════════════════
-echo "=== Iniciando ==="
-"$BUILD/a/agente" >"$BUILD/a.log" 2>&1 & PIDS+=($!)
-"$BUILD/b/agente" >"$BUILD/b.log" 2>&1 & PIDS+=($!)
-sleep 1.5
-
-PUB_IP=$(grep -oP '(?<=Mi IP en la red es: )\S+' "$BUILD/a.log" | head -1)
-[ -z "$PUB_IP" ] && { echo "Error: no se detectó la IP del agente"; exit 1; }
-echo "  IP: $PUB_IP"
-
-# Bridge: AgA llama a conectar_a_nodo("127.0.0.2", 4040).
-# socat escucha en 127.0.0.2:4040 y redirige la conexión al socket de RED de AgB.
-socat TCP-LISTEN:4040,bind=127.0.0.2,reuseaddr,fork TCP:"$PUB_IP":$PORT_B & PIDS+=($!)
-sleep 0.5
-
-# ══════════════════════════════════════════════════════════════════
-# 3. ESCENARIO DEADLOCK — 4 pasos, 6 verificaciones
-# ══════════════════════════════════════════════════════════════════
-echo "=== Escenario ==="
-
-# Paso 1: Saturar GPU de AgB con Job 9000.
-#   nc conecta al socket de RED de AgB (PUB_IP:PORT_B) para que lo trate
-#   como otro agente C. La salida va a /dev/null para evitar que nc muera
-#   por SIGPIPE antes de que hagamos el reintento.
-FIFO="$BUILD/sat.in"; rm -f "$FIFO"; mkfifo "$FIFO"
-nc "$PUB_IP" $PORT_B <"$FIFO" >/dev/null & PIDS+=($!)
-exec 7>"$FIFO"; sleep 0.4
-printf 'RESERVE 9000 gpu:1\n' >&7; sleep 1
-grep -q "GRANTED 9000" "$BUILD/b.log" \
-    && ok "GPU de AgB saturada — Job 9000 tiene gpu:1 (AgB GPU=0)" \
-    || ok "RESERVE 9000 enviado a AgB"
-
-# Paso 2: Erlang A pide gpu:1 en AgB. Como GPU=0, queda ENCOLADO.
-exec 5<>/dev/tcp/127.0.0.1/$PORT_A; sleep 0.3
-printf 'JOB_REQUEST 1001 @127.0.0.2:gpu:1\n' >&5; sleep 2
-grep -q "Erlang pide trabajo 1001" "$BUILD/a.log" \
-    && ok "AgA procesó JOB_REQUEST 1001 → RESERVE enviado a AgB" \
-    || fail "AgA no procesó JOB_REQUEST 1001"
-grep -q "intenta reservar localmente" "$BUILD/b.log" \
-    && ok "AgB recibió RESERVE 1001 (GPU ocupada → encolado)" \
-    || fail "AgB no recibió RESERVE 1001"
-
-# Paso 3: Esperar que gestor_expirar_pedidos detecte el pedido caducado.
-#   El timer dispara cada 2 s; con TIEMPO_ESPERA=6 s, el pedido expira en ~6 s.
-echo "  Esperando expiración (6 s + 2 s de margen)..."
-sleep 8
-grep -qE "job_id 1001|TIMEOUT.*1001" "$BUILD/b.log" \
-    && ok "AgB: Job 1001 expirado → JOB_TIMEOUT disparado" \
-    || fail "AgB no expiró Job 1001"
-grep -q "JOB_TIMEOUT 1001" "$BUILD/a.log" \
-    && ok "AgA reenvió JOB_TIMEOUT 1001 a Erlang" \
-    || fail "AgA no reenvió JOB_TIMEOUT 1001"
-
-# Paso 4: Liberar GPU y reintentar (simula el backoff de Erlang).
-printf 'JOB_RELEASE 9000\n' | nc -w2 127.0.0.1 $PORT_B 2>/dev/null || true; sleep 1
-printf 'JOB_REQUEST 1001 @127.0.0.2:gpu:1\n' >&5; sleep 2
-grep -q "JOB_GRANTED 1001" "$BUILD/a.log" \
-    && ok "Job 1001 → JOB_GRANTED tras reintento (deadlock resuelto)" \
-    || fail "No se obtuvo JOB_GRANTED 1001"
-
-exec 5>&-; exec 7>&-
-
+# 2. EJECUTAR
 # ══════════════════════════════════════════════════════════════════
 echo ""
-printf "Pasados: %d  |  Fallidos: %d\n" "$PASS" "$FAIL"
+echo "=== Ejecutando ==="
+"$BUILD/test_deadlock"
+EXIT_C=$?
+
+# ══════════════════════════════════════════════════════════════════
+# 3. RESULTADO FINAL (el exit code del binario C lo resume todo)
+# ══════════════════════════════════════════════════════════════════
+echo ""
+[ $EXIT_C -eq 0 ] \
+    && ok  "Escenario anti-deadlock completo sin fallos" \
+    || fail "Escenario anti-deadlock tuvo fallos (ver detalle arriba)"
+
+printf "\nPasados (bash): %d  |  Fallidos (bash): %d\n" "$PASS" "$FAIL"
 [ $FAIL -eq 0 ] && echo "TODOS LOS TESTS PASARON ✓" || echo "ALGUNOS TESTS FALLARON ✗"
