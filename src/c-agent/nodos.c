@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 
 /*funciones para la tabla de nodos*/
@@ -12,6 +13,10 @@ static Nodo nodo_copiar(Nodo nodo){
 }
 
 static void nodo_destruir(Nodo nodo){
+    if (nodo->conexion != NULL) {
+        close(nodo->conexion->fd);
+        free(nodo->conexion);
+    }
     free(nodo);
 }
 
@@ -61,12 +66,13 @@ Nodo crear_nodo(char* ip, int puerto, int cpu, int gpu, int mem){
     //creamos un nodo
     Nodo nodo = malloc(sizeof (struct nodo_));
     strncpy(nodo->ip, ip, (sizeof (nodo->ip) -1));
-    nodo->ip[sizeof(nodo->ip) - 1] = '\0'; 
+    nodo->ip[sizeof(nodo->ip) - 1] = '\0';
     nodo->puerto = puerto;
     nodo->cpu = cpu;
     nodo->gpu = gpu;
     nodo->mem = mem;
     nodo->ultimo_anuncio = time(NULL);
+    nodo->conexion = NULL;
     return nodo;
 }
 
@@ -206,7 +212,6 @@ char* get_nodes(TablaNodos tabla_nodos) {
 }
 
 int buscar_nodo(char* ip, int puerto, TablaNodos tabla_nodos){
-    /*creamos nodo de busqueda*/
     struct nodo_ busqueda;
     strncpy(busqueda.ip, ip, (sizeof(busqueda.ip) - 1));
     busqueda.ip[sizeof(busqueda.ip) - 1] = '\0';
@@ -214,4 +219,35 @@ int buscar_nodo(char* ip, int puerto, TablaNodos tabla_nodos){
 
     Nodo encontrado = tablahash_buscar(tabla_nodos->tabla, &busqueda);
     return encontrado != NULL;
+}
+
+/* Helper interno: devuelve el puntero al nodo por ip+puerto, o NULL. */
+static Nodo buscar_nodo_ptr(char* ip, int puerto, TablaNodos tabla_nodos) {
+    struct nodo_ busqueda;
+    strncpy(busqueda.ip, ip, sizeof(busqueda.ip) - 1);
+    busqueda.ip[sizeof(busqueda.ip) - 1] = '\0';
+    busqueda.puerto = puerto;
+    return (Nodo)tablahash_buscar(tabla_nodos->tabla, &busqueda);
+}
+
+ClienteConectado* nodo_obtener_conexion(char* ip, int puerto, TablaNodos tabla_nodos) {
+    Nodo n = buscar_nodo_ptr(ip, puerto, tabla_nodos);
+    return (n != NULL) ? n->conexion : NULL;
+}
+
+void nodo_registrar_conexion(char* ip, int puerto, ClienteConectado* cliente, TablaNodos tabla_nodos) {
+    Nodo n = buscar_nodo_ptr(ip, puerto, tabla_nodos);
+    if (n != NULL) n->conexion = cliente;
+}
+
+void nodo_limpiar_conexion_por_fd(int fd, TablaNodos tabla_nodos) {
+    GList temp = tabla_nodos->lista;
+    while (temp != NULL) {
+        Nodo n = (Nodo)temp->data;
+        if (n->conexion != NULL && n->conexion->fd == fd) {
+            n->conexion = NULL;
+            return;
+        }
+        temp = temp->next;
+    }
 }

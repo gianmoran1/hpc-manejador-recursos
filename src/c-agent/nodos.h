@@ -3,6 +3,7 @@
 
 #include "tablahash.h"
 #include "glist.h"
+#include "cliente.h"
 #include <time.h>
 
 
@@ -13,6 +14,7 @@ typedef struct nodo_{
     int gpu;
     int mem;
     time_t ultimo_anuncio;
+    ClienteConectado *conexion; /* NULL = sin conexión activa */
 } *Nodo;
 
 typedef struct tabla_nodos{
@@ -47,6 +49,13 @@ int buscar_nodo(char* ip, int puerto, TablaNodos tabla_nodos);
 /*procesa un anuncio de un nodo*/
 void procesar_anuncio(TablaNodos tabla_nodos, char* ip, int puerto, int cpu, int gpu, int mem);
 
+/* Devuelve la conexión activa del nodo (ip, puerto), o NULL si no existe o no tiene conexión */
+ClienteConectado* nodo_obtener_conexion(char* ip, int puerto, TablaNodos tabla_nodos);
 
+/* Asocia una conexión al nodo (ip, puerto). No-op si el nodo no está en la tabla. */
+void nodo_registrar_conexion(char* ip, int puerto, ClienteConectado* cliente, TablaNodos tabla_nodos);
+
+/* Pone a NULL el campo conexion del nodo que tenga ese fd. No libera memoria (el caller lo hace). */
+void nodo_limpiar_conexion_por_fd(int fd, TablaNodos tabla_nodos);
 
 #endif /* __NODOS_H__ */

@@ -255,8 +255,10 @@ void* bucle_principal(void* args) {
                         printf("ALERTA: Erlang (FD %d) se desconectó.\n", cliente->fd);
                     } else {
                         printf("Nodo de red (FD %d) desconectado. Liberando sus recursos...\n", cliente->fd);
-                        // Liberar todos los recursos del nodo caído y notificar a los que esperaban
                         manejar_desconexion_socket(estado, cliente->fd, callback_granted_red);
+                        // Evitar que nodo_destruir intente close+free de un ClienteConectado
+                        // que ya vamos a liberar nosotros justo debajo.
+                        nodo_limpiar_conexion_por_fd(cliente->fd, estado->registro_nodos);
                     }
                     close(cliente->fd);
                     free(cliente);

@@ -114,14 +114,19 @@ void procesar_mensaje_erlang(ClienteConectado *cliente, char* msg) {
                     return;
                 }
 
-                // Intentamos reutilizar una conexión existente; si no, abrimos una nueva
-                // int fd_destino = santos_obtener_fd_por_ip(ip_destino);
-                int fd_destino = -1; // MOCK: reemplazar con lookup en tabla de nodos
-                if (fd_destino == -1) {
+                // Reutilizar conexión existente al nodo; si no hay, abrir una nueva y registrarla.
+                ClienteConectado *cx = nodo_obtener_conexion(ip_destino, PUERTO_TCP,
+                                                             estado->registro_nodos);
+                int fd_destino;
+                if (cx != NULL) {
+                    fd_destino = cx->fd;
+                } else {
                     fd_destino = conectar_a_nodo(ip_destino, PUERTO_TCP);
                     if (fd_destino != -1) {
-                        ClienteConectado *nuevo_nodo = crear_cliente_conectado(fd_destino, 0);
-                        agregar_cliente_en_epoll(nuevo_nodo, EPOLLIN | EPOLLONESHOT);
+                        ClienteConectado *nueva = crear_cliente_conectado(fd_destino, 0);
+                        agregar_cliente_en_epoll(nueva, EPOLLIN | EPOLLONESHOT);
+                        nodo_registrar_conexion(ip_destino, PUERTO_TCP, nueva,
+                                                estado->registro_nodos);
                     }
                 }
 
