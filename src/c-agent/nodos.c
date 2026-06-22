@@ -187,6 +187,14 @@ char* get_nodes(TablaNodos tabla_nodos) {
         temp = temp->next;
     }
     
+    
+    // Verificamos tener al menos 2 bytes libres para el '\n' y el '\0' implícito
+    if (strlen(buffer) + 2 > (size_t)capacidad_actual) {
+        capacidad_actual += 2; 
+        buffer = realloc(buffer, capacidad_actual);
+    }
+    strcat(buffer, "\n");
+
     /*IMPORTANTE*/
     // Este string debe ser liberado con free() después de enviarlo por el socket
     return buffer;
