@@ -49,7 +49,7 @@ int erlangSocket = -1;
 int timer_anuncios_fd;
 char mi_ip_publica[16];
 EstadoGlobal estado = NULL;
-
+// EL ESTADO ES NULL CUANDO LLEGA UN MENSAJE TCP? 
 
 
 

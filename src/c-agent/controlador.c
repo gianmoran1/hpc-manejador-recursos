@@ -62,13 +62,13 @@ void procesar_mensaje_erlang(ClienteConectado *cliente, char* msg) {
                 enviar_mensaje_tcp(cliente->fd, nodos);
                 free(nodos);
             }
-            printf("nodos enviados a erlang");
+            printf("nodos enviados a erlang\n");
             return;
         }
 
         // Erlang envía: JOB_REQUEST <id> @IP:recurso:cant [@IP2:recurso2:cant2 ...]
         if (strcmp(comando, "JOB_REQUEST") == 0 && parseados >= 2) {
-            printf("[CONTROLADOR] Erlang pide trabajo %d\n", job_id);
+            printf("[CONTROLADOR] Erlang pide RECURSOS: %s para el trabajo %d\n", recursos, job_id);
 
             // Avanzamos el cursor hasta el primer token @IP:...
             const char *cursor = msg;
@@ -159,7 +159,7 @@ void procesar_mensaje_erlang(ClienteConectado *cliente, char* msg) {
         else if (strcmp(comando, "JOB_RELEASE") == 0 && parseados == 2) {
             // 1. Enviar RELEASE a todos los nodos remotos de esta peticion
             int fds[16]; int n = 0;
-
+            // ARMAR EL MENSAJE RELEASE JOB_ID RECURSO CANTIDAD ANTES DE LIBERAR LA PETICION, PARA PODER ENVIARLE AL NODO EL MENSAJE CORRECTO
             pthread_mutex_lock(&estado->lock);
             PeticionMulti p = gestor_buscar_peticion(estado, job_id);
             if (p) {
@@ -199,7 +199,7 @@ void procesar_mensaje_red_c(ClienteConectado *cliente, char* msg) {
         if (strcmp(comando, "RESERVE") == 0 && parseados == 3) {
             printf("[CONTROLADOR] El FD %d intenta reservar localmente %s para el trabajo %d\n",
                    cliente->fd, recursos, job_id);
-
+            // CHEQUEAR PORQUE NO RESERVA BIEN CUANDO RECIBE DE OTRO NODO, DEVUELVE SIEMPRE DENIED
             char nombre_res[32]; int cant_res = 0; int resultado_res = -1;
             if (sscanf(recursos, "%31[^:]:%d", nombre_res, &cant_res) == 2)
                 resultado_res = gestor_manejar_reserva(estado, nombre_res, job_id, cliente->fd, cant_res);
@@ -273,9 +273,10 @@ void procesar_mensaje_red_c(ClienteConectado *cliente, char* msg) {
         }
 
         // CASO 4: Otro agente nos pide que liberemos un job (rollback remoto)
+        // PARSEAR EL MENSAJE RELEASE JOB_ID RECURSO CANTIDAD PARA LLAMAR A LA FUNCION GESTOR_MANEJAR_RELEASE CON LOS ARGUMENTOS NECESARIOS
         else if (strcmp(comando, "RELEASE") == 0 && parseados >= 2) {
             printf("[CONTROLADOR] RELEASE recibido para job %d, liberando recursos locales.\n", job_id);
-            gestor_liberar_job(estado, job_id, callback_granted_red);
+            gestor_liberar_job(estado, job_id, callback_granted_red); // 
         }
 
         else {
