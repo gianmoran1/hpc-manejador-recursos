@@ -147,6 +147,7 @@ void procesar_mensajes_en_buffer(ClienteConectado *cliente) {
 // Función que ejecutarán los 4 hilos trabajadores para atender eventos del epoll
 // bucle principal donde me quedo esperando eventos en el epoll y los atiendo según el tipo de evento que sea (nueva conexión TCP, mensaje UDP, mensaje en socket ya conectado, etc)
 void* bucle_principal(void* args) {
+    (void)args;
     struct epoll_event eventos[MAX_EVENTS];
 
     for(;;) {
@@ -161,7 +162,6 @@ void* bucle_principal(void* args) {
 
             ClienteConectado *entidad = (ClienteConectado *) eventos[n].data.ptr;
             int fd_listo = entidad->fd;
-            int fd_listo = eventos[n].data.fd;  
 
             // si el evento esta en un socket de escucha, es porque hay una nueva conexión queriendo entrar. 
             // Hay que aceptarla y agregarla al epoll para escuchar lo que mande ese nuevo cliente

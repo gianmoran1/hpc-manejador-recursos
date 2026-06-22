@@ -94,13 +94,133 @@ int main(void) {
 
     estado_destruir(estado);
 
+    /* ══════════════════════════════════════════════════════════════════
+     * ESCENARIO 2: DENIED con rollback
+     *
+     * Job 500 pide dos recursos en dos "nodos":
+     *   Nodo A (cpu:2) → GRANTED
+     *   Nodo B (gpu:1) → DENIED  (GPU ocupada por job 8000)
+     * Al recibir el DENIED el agente debe liberar lo ya grantado en Nodo A.
+     * ══════════════════════════════════════════════════════════════════ */
+    printf("\n=== Escenario 2: DENIED con rollback ===\n\n");
+
+    /* Dos gestores independientes, uno por "nodo" */
+    EstadoGlobal nodo_a = estado_crear(4, 0, 0);
+    EstadoGlobal nodo_b = estado_crear(0, 1, 0);
+
+    /* ── Preparar: saturar la GPU de Nodo B con job 8000 ── */
+    gestor_manejar_reserva(nodo_b, "gpu", 8000, 99, 1);
+    assert_true(nodo_b->gpu->disponible == 0, "Nodo B: GPU saturada por job 8000");
+
+    /* ── Paso 1: Job 500 reserva cpu:2 en Nodo A → GRANTED ── */
+    printf("\n--- Paso 1: Job 500 reserva cpu:2 en Nodo A ---\n");
+    int r500 = gestor_manejar_reserva(nodo_a, "cpu", 500, 30, 2);
+    assert_true(r500 == 1,                    "RESERVE 500 cpu:2 en Nodo A -> GRANTED");
+    assert_true(nodo_a->cpu->disponible == 2, "Nodo A: cpu disponible = 2");
+
+    /* ── Paso 2: Job 500 pide gpu:1 en Nodo B → encolado (Nodo B lleno) ── */
+    printf("\n--- Paso 2: Job 500 pide gpu:1 en Nodo B (GPU llena) ---\n");
+    int r500b = gestor_manejar_reserva(nodo_b, "gpu", 500, 30, 1);
+    assert_true(r500b == 0, "RESERVE 500 gpu:1 en Nodo B -> encolado");
+
+    /* ── Paso 3: Nodo B envía DENIED (simulado por timeout/expiración inmediata)
+     *           → el agente hace rollback liberando todo lo grantado en Nodo A ── */
+    printf("\n--- Paso 3: DENIED de Nodo B -> rollback en Nodo A ---\n");
+
+    /* Simular que Nodo B expira el pedido de job 500 y envía JOB_TIMEOUT/DENIED */
+    SolicitudPendiente sol_b =
+        (SolicitudPendiente)cola_inicio(nodo_b->gpu->pendientes, sin_copia);
+    if (sol_b) sol_b->instante_llegada = 0;
+    gestor_expirar_pedidos(nodo_b, cb_timeout);
+    assert_true(ultimo_timeout_job == 500, "Nodo B expiró el pedido de job 500");
+
+    /* Rollback: el agente recibe el DENIED/TIMEOUT y libera lo ya grantado en Nodo A */
+    gestor_liberar_job(nodo_a, 500, cb_granted);
+    assert_true(nodo_a->cpu->disponible == 4, "Rollback exitoso: Nodo A cpu vuelve a 4");
+    assert_true(nodo_b->gpu->disponible == 0, "Nodo B: gpu sigue ocupada por job 8000");
+
+    estado_destruir(nodo_a);
+    estado_destruir(nodo_b);
+
+    /* ══════════════════════════════════════════════════════════════════
+     * ESCENARIO 3: Casos borde del gestor de recursos
+     * ══════════════════════════════════════════════════════════════════ */
+    printf("\n=== Escenario 3: Casos borde ===\n\n");
+
+    EstadoGlobal e = estado_crear(4, 1, 1024);
+
+    /* ── Borde 1: recurso inválido → DENIED (-1) ── */
+    printf("--- Borde 1: recurso inválido ---\n");
+    assert_true(gestor_manejar_reserva(e, "disco", 1, 1, 1) == -1,
+                "recurso 'disco' no existe -> DENIED");
+
+    /* ── Borde 2: cantidad 0 → DENIED ── */
+    printf("\n--- Borde 2: cantidad = 0 ---\n");
+    assert_true(gestor_manejar_reserva(e, "cpu", 2, 1, 0) == -1,
+                "cantidad 0 -> DENIED");
+
+    /* ── Borde 3: cantidad > capacidad → DENIED ── */
+    printf("\n--- Borde 3: cantidad > capacidad ---\n");
+    assert_true(gestor_manejar_reserva(e, "cpu", 3, 1, 99) == -1,
+                "cantidad 99 > capacidad 4 -> DENIED");
+
+    /* ── Borde 4: release más de lo reservado no produce negativo ── */
+    printf("\n--- Borde 4: release excede lo reservado ---\n");
+    gestor_manejar_reserva(e, "cpu", 10, 5, 2); /* reserva 2 cpu */
+    gestor_manejar_release(e, "cpu", 10, 100, NULL); /* intenta liberar 100 */
+    assert_true(e->cpu->disponible == 4,
+                "release excesivo liberó solo lo reservado (cpu=4, sin negativo)");
+
+    /* ── Borde 5: FIFO estricto — job en cola bloquea a otros aunque haya recursos ──
+     *   cpu:4 total.  Job 20 reserva 3 cpu → disponible=1.
+     *   Job 21 pide 2 cpu → encola (hay 1, necesita 2).
+     *   Job 22 pide 1 cpu → encola detrás de 21 (FIFO bloquea el salto de fila).
+     *   Se libera 1 cpu → disponible=2, pero 21 necesita 2 → ¡ahora puede servirse!
+     *   22 queda aún esperando.                                                   */
+    printf("\n--- Borde 5: FIFO estricto (no se salta la fila) ---\n");
+    int ultimo_granted_local = -1;
+    /* reusar cb_granted registra en ultimo_granted_job */
+    gestor_manejar_reserva(e, "cpu", 20, 5, 3); /* 4-3=1 disponible */
+    int r21 = gestor_manejar_reserva(e, "cpu", 21, 6, 2); /* encola */
+    int r22 = gestor_manejar_reserva(e, "cpu", 22, 7, 1); /* encola detrás */
+    assert_true(r21 == 0, "Job 21 (necesita 2) encolado (solo hay 1)");
+    assert_true(r22 == 0, "Job 22 (necesita 1) encola detrás de 21 (FIFO)");
+    /* Liberar 1 cpu de job 20 → disponible pasa a 2, alcanza para job 21 */
+    ultimo_granted_job = -1;
+    gestor_manejar_release(e, "cpu", 20, 1, cb_granted);
+    assert_true(ultimo_granted_job == 21,
+                "Con 2 cpu disponibles se sirvió job 21 (cabeza de cola)");
+    assert_true(!cola_es_vacia(e->cpu->pendientes),
+                "Job 22 sigue esperando (FIFO: 21 fue primero)");
+
+    /* ── Borde 6: release de job inexistente es no-op ── */
+    printf("\n--- Borde 6: release de job inexistente ---\n");
+    int cpu_antes = e->cpu->disponible;
+    gestor_liberar_job(e, 9999, cb_granted); /* job 9999 nunca existió */
+    assert_true(e->cpu->disponible == cpu_antes,
+                "release de job inexistente no altera los recursos");
+
+    /* ── Borde 7: double reserve mismo job_id acumula recursos ── */
+    printf("\n--- Borde 7: doble RESERVE del mismo job ---\n");
+    EstadoGlobal e2 = estado_crear(8, 0, 0);
+    gestor_manejar_reserva(e2, "cpu", 77, 10, 2);
+    gestor_manejar_reserva(e2, "cpu", 77, 10, 3); /* mismo job, mismo recurso */
+    assert_true(e2->cpu->disponible == 3,
+                "doble RESERVE acumula: 8-2-3=3 disponibles");
+    gestor_liberar_job(e2, 77, NULL); /* liberar ambas asignaciones */
+    assert_true(e2->cpu->disponible == 8,
+                "liberar_job libera el total acumulado (cpu vuelve a 8)");
+    estado_destruir(e2);
+
+    estado_destruir(e);
+
     printf("\nPasados: %d  |  Fallidos: %d\n", pass, fail);
     printf(fail == 0 ? "TODOS LOS TESTS PASARON\n" : "ALGUNOS TESTS FALLARON\n");
     return fail > 0 ? 1 : 0;
 }
 CTEST
 
-SRCS="gestor_estado.c recursos.c jobs.c nodos.c tablahash.c glist.c cola.c"
+SRCS="gestor_estado.c recursos.c jobs.c nodos.c tablahash.c glist.c cola.c transacciones.c"
 gcc -g -I"$SRC" "$BUILD/test_deadlock.c" \
     $(for f in $SRCS; do echo "$SRC/$f"; done) \
     -lpthread -o "$BUILD/test_deadlock" 2>"$BUILD/err.log" \

@@ -11,6 +11,15 @@
 static void* no_copia_solicitud(void* dato) { return dato; }
 static void destruir_solicitud(void* dato) { free(dato); }
 
+// Helpers para la tabla hash de peticiones multi-recurso
+static void* no_copia_peticion(void* dato) { return dato; }
+static int peticion_comparar(void* dato1, void* dato2) {
+    return ((PeticionMulti)dato1)->job_id - ((PeticionMulti)dato2)->job_id;
+}
+static unsigned peticion_hash(void* dato) {
+    return (unsigned)((PeticionMulti)dato)->job_id;
+}
+
 
 static RecursoLocal obtener_recurso(EstadoGlobal estado, char* nombre) {
     if (strcmp(nombre, "cpu") == 0) return estado->cpu;
@@ -26,6 +35,7 @@ EstadoGlobal estado_crear(int cap_cpu, int cap_gpu, int cap_mem) {
     e->mem = recurso_crear("mem", cap_mem);
     e->libro_contable = crear_tabla_jobs();
     e->registro_nodos = crear_tabla_nodos();
+    e->peticiones_pendientes = tablahash_crear(100, no_copia_peticion, peticion_comparar, (FuncionDestructora)free, peticion_hash);
     pthread_mutex_init(&e->lock, NULL);
     return e;
 }
@@ -37,6 +47,7 @@ void estado_destruir(EstadoGlobal estado) {
     pthread_mutex_destroy(&estado->lock);
     destruir_tabla_jobs(estado->libro_contable);
     destruir_tabla_nodos(estado->registro_nodos);
+    tablahash_destruir(estado->peticiones_pendientes);
     free(estado);
 }
 
@@ -205,6 +216,28 @@ void manejar_desconexion_socket(EstadoGlobal estado, int socket_caido, void (*av
     pthread_mutex_unlock(&estado->lock);
 }
 
+
+// -----------------------------------------------------------------------------
+// GESTIÓN DE PETICIONES MULTI-RECURSO
+// -----------------------------------------------------------------------------
+
+void gestor_registrar_peticion(EstadoGlobal estado, PeticionMulti p) {
+    pthread_mutex_lock(&estado->lock);
+    tablahash_insertar(estado->peticiones_pendientes, p);
+    pthread_mutex_unlock(&estado->lock);
+}
+
+PeticionMulti gestor_buscar_peticion(EstadoGlobal estado, int job_id) {
+    struct peticionMulti_ busqueda;
+    busqueda.job_id = job_id;
+    return (PeticionMulti)tablahash_buscar(estado->peticiones_pendientes, &busqueda);
+}
+
+void gestor_eliminar_peticion(EstadoGlobal estado, int job_id) {
+    struct peticionMulti_ busqueda;
+    busqueda.job_id = job_id;
+    tablahash_eliminar(estado->peticiones_pendientes, &busqueda);
+}
 
 // -----------------------------------------------------------------------------
 // OPERACIONES DEL RADAR DE NODOS (Protocolo Erlang / UDP)
