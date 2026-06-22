@@ -4,7 +4,7 @@
 -include("../../include/config.hrl").
 
 main() ->
-  spawn(loggerScheduler, iniciar, ["scheduler.log", self()]),
+  spawn_link(loggerScheduler, iniciar, ["scheduler.log", self()]),
   receive
     {okLogger} ->
       conectarConBackoff(?INIT_DELAY_BACKOFF);

@@ -37,13 +37,17 @@
 
 
 
+#define CAP_CPU 4
+#define CAP_GPU 1
+#define CAP_MEM 8192
+
 int epoll_fd;
 int lsock_publico;
 int lsock_local;
 int usock_udp;
 int erlangSocket = -1;
 int timer_anuncios_fd;
-char mi_ip_publica[16]; // Para guardar mi IP pública y usarla en los anuncios
+char mi_ip_publica[16];
 EstadoGlobal estado = NULL;
 
 
@@ -143,9 +147,15 @@ void procesar_mensajes_en_buffer(ClienteConectado *cliente) {
     }
 }
 
-// SI HACEMOS 4 HILOS, ESTA (CON OTRO NOMBRE) SERA LA FUNCION LLAMADA EN PTHREAD_CREATE PARA QUE CADA HILO EJECUTE EL BUCLE PRINCIPAL DE ATENCION DE EVENTOS DEL EPOLL.
-// Función que ejecutarán los 4 hilos trabajadores para atender eventos del epoll
-// bucle principal donde me quedo esperando eventos en el epoll y los atiendo según el tipo de evento que sea (nueva conexión TCP, mensaje UDP, mensaje en socket ya conectado, etc)
+// Callback de timeout: cuando un RESERVE lleva más de 30s encolado sin resolverse,
+// le enviamos DENIED al coordinador que hizo la reserva para que haga rollback.
+// El coordinador al recibir DENIED libera lo ya grantado en otros nodos y avisa JOB_DENIED a Erlang.
+static void notificar_denied_timeout(int job_id, int socket_fd) {
+    char msj[64];
+    snprintf(msj, sizeof(msj), "DENIED %d\n", job_id);
+    enviar_mensaje_tcp(socket_fd, msj);
+}
+
 void* bucle_principal(void* args) {
     (void)args;
     struct epoll_event eventos[MAX_EVENTS];
@@ -177,61 +187,83 @@ void* bucle_principal(void* args) {
 
                 char buffer_udp[1024];
                 int valido = atender_cliente_udp(usock_udp, buffer_udp, sizeof(buffer_udp));
-                // valido = parsearlo
-                if (!valido) {
-                    // No había nada útil, seguimos esperando
-                    continue;
-                }
-                printf("¡ANNOUNCE UDP recibido Mensaje: %s\n", buffer_udp);
+                if (!valido) continue;
 
-            // santos_actualizar_tabla_nodos(ip_remitente, recuros, buffer_udp);
-            // ENVIO MENSAJE A SANTOS PARA QUE ACTUALICE SU TABLA DE NODOS CON ESTE NUEVO NODO QUE SE ANUNCIA
-                
+                printf("¡ANNOUNCE UDP recibido: %s\n", buffer_udp);
+
+                // Formato: "IP_REMITENTE ANNOUNCE IP_NODE PUERTO cpu:X [gpu:Y] [mem:Z]"
+                char ip_rem[50], cmd[32], ip_node[50];
+                int puerto_node = 0, cpu = 0, gpu = 0, mem = 0;
+                int n = sscanf(buffer_udp, "%49s %31s %49s %d",
+                               ip_rem, cmd, ip_node, &puerto_node);
+                if (n == 4 && strcmp(cmd, "ANNOUNCE") == 0) {
+                    // Avanzar el cursor hasta los tokens de recursos
+                    const char *ptr = buffer_udp;
+                    for (int i = 0; i < 4; i++) {
+                        while (*ptr && *ptr != ' ') ptr++;
+                        while (*ptr == ' ') ptr++;
+                    }
+                    char tok[64];
+                    while (sscanf(ptr, "%63s", tok) == 1) {
+                        char res[16]; int val;
+                        if (sscanf(tok, "%15[^:]:%d", res, &val) == 2) {
+                            if      (strcmp(res, "cpu") == 0) cpu = val;
+                            else if (strcmp(res, "gpu") == 0) gpu = val;
+                            else if (strcmp(res, "mem") == 0) mem = val;
+                        }
+                        while (*ptr && *ptr != ' ') ptr++;
+                        while (*ptr == ' ') ptr++;
+                    }
+                    gestor_procesar_anuncio(estado, ip_node, puerto_node, cpu, gpu, mem);
+                }
             } 
 
              
             else if (fd_listo == timer_anuncios_fd) {
 
-                // Sonó el reloj, lo vacio para que no siga sonando en loop
                 uint64_t expiraciones;
                 read(timer_anuncios_fd, &expiraciones, sizeof(expiraciones));
 
-                // Armamos el mensaje a gritar usando la IP pública real
-                // OJO: En la versión final, los recursos los sacás de variables dinámicas
+                // Expirar peticiones de RESERVE que llevan más de 30s esperando (anti-deadlock)
+                gestor_expirar_pedidos(estado, notificar_denied_timeout);
+
+                // Desconectar nodos que no enviaron ANNOUNCE en los últimos 15s
+                gestor_desconectar_nodos(estado);
+
+                // Anunciar los recursos disponibles actuales (no totales hardcodeados)
                 char msj[256];
-                // msj = pedir_recursos_disponibles(); // ACA PEDIS LOS RECURSOS DISPONIBLES ACTUALES PARA ANUNCIARLOS EN EL MENSAJE
-                sprintf(msj, "ANNOUNCE %s %d cpu:4 mem:8192\n", mi_ip_publica, PUERTO_TCP);
-                
-                enviar_mensaje_udp(usock_udp, "255.255.255.255", PUERTO_UDP, msj);             
+                pthread_mutex_lock(&estado->lock);
+                int disp_cpu = estado->cpu->disponible;
+                int disp_gpu = estado->gpu->disponible;
+                int disp_mem = estado->mem->disponible;
+                pthread_mutex_unlock(&estado->lock);
+
+                snprintf(msj, sizeof(msj), "ANNOUNCE %s %d cpu:%d gpu:%d mem:%d\n",
+                         mi_ip_publica, PUERTO_TCP, disp_cpu, disp_gpu, disp_mem);
+                enviar_mensaje_udp(usock_udp, "255.255.255.255", PUERTO_UDP, msj);
             }
 
             // Es un cliente que ya estaba conectado mandando texto (RESERVE, JOB_REQUEST, etc)
             else {
-                
+
                 ClienteConectado *cliente = (ClienteConectado *) eventos[n].data.ptr;
 
-                int estado = atender_cliente_tcp(cliente);
-                if (estado == 0) {
-                    // El socket se rompió o desconectó. Hacemos la limpieza acá.
+                int ret = atender_cliente_tcp(cliente);
+                if (ret == 0) {
+                    // El socket se rompió o desconectó.
                     if (cliente->es_erlang) {
                         printf("ALERTA: Erlang (FD %d) se desconectó.\n", cliente->fd);
                     } else {
-                        printf("Nodo de red (FD %d) desconectado.\n", cliente->fd);
-                        // ACÁ ES DONDE LLAMÁS A SANTOS
-                        // santos_eliminar_nodo(cliente->fd);
+                        printf("Nodo de red (FD %d) desconectado. Liberando sus recursos...\n", cliente->fd);
+                        // Liberar todos los recursos del nodo caído y notificar a los que esperaban
+                        manejar_desconexion_socket(estado, cliente->fd, callback_granted_red);
                     }
-                    
-                    // Destruimos la ficha
                     close(cliente->fd);
                     free(cliente);
                 }
                 else {
-                // Procesamos los mensajes completos que tengamos en el buffer 
-                // Si llegamos acá, es porque ya leímos todo lo que había en la red
-                procesar_mensajes_en_buffer(cliente);
-
-                // Rearmo el epoll, vuelvo a vigilar el socket
-                modificar_cliente_en_epoll(cliente, EPOLLIN | EPOLLONESHOT);
+                    procesar_mensajes_en_buffer(cliente);
+                    modificar_cliente_en_epoll(cliente, EPOLLIN | EPOLLONESHOT);
                 }
             }
         }
@@ -245,7 +277,8 @@ int main() {
 
     signal(SIGPIPE, SIG_IGN);
 
-	
+    estado = estado_crear(CAP_CPU, CAP_GPU, CAP_MEM);
+
     obtener_mi_ip_local(mi_ip_publica);
     
     printf("Arrancando... Mi IP en la red es: %s\n", mi_ip_publica);

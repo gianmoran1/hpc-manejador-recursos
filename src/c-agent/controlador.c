@@ -11,10 +11,11 @@
 // Estado global definido en Agente.c
 extern EstadoGlobal estado;
 
-// Callback que usa el gestor para notificar a un cliente que su job pendiente fue concedido
-static void callback_job_granted(int job_id, int socket_fd) {
+// Callback C-C: notifica a un nodo coordinador que su RESERVE encolado fue concedido.
+// Usa "GRANTED" (protocolo C-C), no "JOB_GRANTED" (que es solo para Erlang).
+void callback_granted_red(int job_id, int socket_fd) {
     char msj[64];
-    snprintf(msj, sizeof(msj), "JOB_GRANTED %d\n", job_id);
+    snprintf(msj, sizeof(msj), "GRANTED %d\n", job_id);
     enviar_mensaje_tcp(socket_fd, msj);
 }
 
@@ -170,7 +171,7 @@ void procesar_mensaje_erlang(ClienteConectado *cliente, char* msg) {
             }
 
             // 2. Liberar recursos locales (si este agente tenía algo reservado)
-            gestor_liberar_job(estado, job_id, callback_job_granted);
+            gestor_liberar_job(estado, job_id, callback_granted_red);
         }
 
         else {
@@ -272,7 +273,7 @@ void procesar_mensaje_red_c(ClienteConectado *cliente, char* msg) {
         // CASO 4: Otro agente nos pide que liberemos un job (rollback remoto)
         else if (strcmp(comando, "RELEASE") == 0 && parseados >= 2) {
             printf("[CONTROLADOR] RELEASE recibido para job %d, liberando recursos locales.\n", job_id);
-            gestor_liberar_job(estado, job_id, callback_job_granted);
+            gestor_liberar_job(estado, job_id, callback_granted_red);
         }
 
         else {

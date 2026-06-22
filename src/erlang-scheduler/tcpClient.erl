@@ -68,6 +68,9 @@ recibirRespuesta(Socket, PidScheduler) ->
 % respuesta.
 procesarMensaje(Tokens) ->
   case Tokens of
+    ["NODES"] ->
+      {nodos, ""};
+
     ["NODES", StrNodos] ->
       {nodos, StrNodos};
 
