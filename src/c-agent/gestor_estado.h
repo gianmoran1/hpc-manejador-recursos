@@ -6,6 +6,7 @@
 #include "recursos.h"
 #include "jobs.h"
 #include "nodos.h"
+#include "transacciones.h"
 #include <pthread.h>
 
 typedef struct estadoGlobal_ {
@@ -14,6 +15,7 @@ typedef struct estadoGlobal_ {
     RecursoLocal mem;
     TablaJobs libro_contable;
     TablaNodos registro_nodos;
+    PeticionMulti peticiones_pendientes;
     pthread_mutex_t lock;
 } *EstadoGlobal;
 
@@ -47,5 +49,16 @@ char* gestor_get_nodes(EstadoGlobal estado);
 /*desconecta todos los nodos registrados
 tambien a ser llamada en el loop, puesto que desconecta al que no haya hecho su annunce */
 void gestor_desconectar_nodos(EstadoGlobal estado);
+
+/* ── Gestión de peticiones multi-recurso ────────────────────────────────── */
+
+/* Inserta la peticion en la lista (toma el lock internamente) */
+void gestor_registrar_peticion(EstadoGlobal estado, PeticionMulti p);
+
+/* Busca por job_id. LLAMAR CON estado->lock YA TOMADO. */
+PeticionMulti gestor_buscar_peticion(EstadoGlobal estado, int job_id);
+
+/* Elimina y libera la peticion con ese job_id. LLAMAR CON estado->lock YA TOMADO. */
+void gestor_eliminar_peticion(EstadoGlobal estado, int job_id);
 
 #endif /* __GESTOR_ESTADO_H__ */

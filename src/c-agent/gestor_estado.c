@@ -26,6 +26,7 @@ EstadoGlobal estado_crear(int cap_cpu, int cap_gpu, int cap_mem) {
     e->mem = recurso_crear("mem", cap_mem);
     e->libro_contable = crear_tabla_jobs();
     e->registro_nodos = crear_tabla_nodos();
+    e->peticiones_pendientes = NULL;
     pthread_mutex_init(&e->lock, NULL);
     return e;
 }
@@ -36,6 +37,8 @@ void estado_destruir(EstadoGlobal estado) {
     recurso_destruir(estado->mem);
     destruir_tabla_jobs(estado->libro_contable);
     destruir_tabla_nodos(estado->registro_nodos);
+    PeticionMulti p = estado->peticiones_pendientes;
+    while (p) { PeticionMulti sig = p->sig; peticion_destruir(p); p = sig; }
     free(estado);
 }
 
@@ -204,6 +207,39 @@ void manejar_desconexion_socket(EstadoGlobal estado, int socket_caido, void (*av
     pthread_mutex_unlock(&estado->lock);
 }
 
+
+// -----------------------------------------------------------------------------
+// GESTIÓN DE PETICIONES MULTI-RECURSO
+// -----------------------------------------------------------------------------
+
+void gestor_registrar_peticion(EstadoGlobal estado, PeticionMulti p) {
+    pthread_mutex_lock(&estado->lock);
+    p->sig = estado->peticiones_pendientes;
+    estado->peticiones_pendientes = p;
+    pthread_mutex_unlock(&estado->lock);
+}
+
+PeticionMulti gestor_buscar_peticion(EstadoGlobal estado, int job_id) {
+    PeticionMulti p = estado->peticiones_pendientes;
+    while (p) {
+        if (p->job_id == job_id) return p;
+        p = p->sig;
+    }
+    return NULL;
+}
+
+void gestor_eliminar_peticion(EstadoGlobal estado, int job_id) {
+    PeticionMulti *p = &estado->peticiones_pendientes;
+    while (*p) {
+        if ((*p)->job_id == job_id) {
+            PeticionMulti encontrado = *p;
+            *p = encontrado->sig;
+            peticion_destruir(encontrado);
+            return;
+        }
+        p = &(*p)->sig;
+    }
+}
 
 // -----------------------------------------------------------------------------
 // OPERACIONES DEL RADAR DE NODOS (Protocolo Erlang / UDP)
