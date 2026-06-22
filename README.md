@@ -1,28 +1,62 @@
 # hpc-manejador-recursos
-  Este es un middleware distribuido que gestiona los recursos de un cluster HPC 
-simulado. Este programa es un nodo autonomo.
 
-  Compilación en C: Para compilar el programa basta con colocar << make >> en la 
-terminal.
+Middleware distribuido que gestiona los recursos de un cluster HPC simulado. Cada instancia es un nodo autónomo compuesto por un agente C (gestión de recursos y comunicación de red) y un scheduler Erlang (asignación de trabajos).
 
-  Ejecución en C: Para correr el intérprete colocamos << ./bin/main >> en la
-terminal.
-Para ejecutarlo con Valgrind colocamos << valgrind -s --leak-check=full 
---track-origins=yes --show-leak-kinds=all ./bin/main >> 
+## Compilación
 
-  Compilación en Erlang: Desde una terminal Erlang se coloca:
-c(loggerScheduler), c(tcpClient), c(manejoRecursos), c(jobWorker), c(scheduler), c(main).
-  
-  Ejecución en Erlang: Desde la terminal habiendo compilado todo, el programa
-se inicia con: main:main().
+**Agente C:**
+```
+make
+```
+El binario queda en `bin/main`. Los archivos objeto intermedios se guardan en `build/`.
 
-  Test: FALTA.
+**Scheduler Erlang:**
+```
+make erlang
+```
+Los `.beam` compilados quedan en `src/erlang-scheduler/`.
 
-  En la carpeta "bin" se guarda el binario resultado de la compilación del
-programa. En "build" se guardan los archivos objeto (.o). En "docs" se halla la
-documentación del programa. La carpeta "include" es la que tiene los archivos de
-cabecera "principales". En "src" se guardan los archivos .c y .erl de los 
-diferentes módulos del programa y en algunos casos se guardan
-junto a sus archivos de cabecera debido a que la implementación es "interna".
-Por último, en la carpeta "test" se halla un archivo para probar el
-programa. 
+## Ejecución
+
+**Agente C:**
+```
+make run
+```
+O directamente:
+```
+./bin/main
+```
+
+**Agente C con Valgrind:**
+```
+make valgrind
+```
+
+**Scheduler Erlang** (desde una terminal Erlang, con los `.beam` ya compilados):
+```erlang
+main:main().
+```
+
+## Tests
+```
+make test
+```
+
+## Limpieza
+```
+make clean
+```
+Elimina los objetos de `build/`, el binario de `bin/` y los `.beam` de Erlang.
+
+## Estructura del proyecto
+
+```
+bin/        Binario compilado del agente C
+build/      Archivos objeto intermedios (.o)
+docs/       Documentación del proyecto
+include/    Cabeceras compartidas (.hrl)
+src/
+  c-agent/            Agente C (fuentes y cabeceras)
+  erlang-scheduler/   Scheduler Erlang (.erl y .beam)
+test/       Scripts de prueba
+```

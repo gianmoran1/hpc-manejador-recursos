@@ -174,9 +174,6 @@ void procesar_mensaje_erlang(ClienteConectado *cliente, char* msg) {
                 snprintf(msj, sizeof(msj), "RELEASE %d\n", job_id);
                 enviar_mensaje_tcp(fds[i], msj);
             }
-
-            // 2. Liberar recursos locales (si este agente tenía algo reservado)
-            gestor_liberar_job(estado, job_id, callback_granted_red);
         }
 
         else {

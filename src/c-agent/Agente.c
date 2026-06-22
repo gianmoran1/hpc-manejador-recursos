@@ -241,6 +241,9 @@ void* bucle_principal(void* args) {
                 snprintf(msj, sizeof(msj), "ANNOUNCE %s %d cpu:%d gpu:%d mem:%d\n",
                          mi_ip_publica, PUERTO_TCP, disp_cpu, disp_gpu, disp_mem);
                 enviar_mensaje_udp(usock_udp, "255.255.255.255", PUERTO_UDP, msj);
+
+                // Actualizar nuestra propia entrada (el eco UDP lo filtramos, así que lo hacemos directo)
+                gestor_procesar_anuncio(estado, mi_ip_publica, PUERTO_TCP, disp_cpu, disp_gpu, disp_mem);
             }
 
             // Es un cliente que ya estaba conectado mandando texto (RESERVE, JOB_REQUEST, etc)
@@ -282,7 +285,10 @@ int main() {
     estado = estado_crear(CAP_CPU, CAP_GPU, CAP_MEM);
 
     obtener_mi_ip_local(mi_ip_publica);
-    
+
+    // Registrarse en la propia tabla de nodos para que Erlang se vea a sí mismo en GET_NODES
+    gestor_procesar_anuncio(estado, mi_ip_publica, PUERTO_TCP, CAP_CPU, CAP_GPU, CAP_MEM);
+
     printf("Arrancando... Mi IP en la red es: %s\n", mi_ip_publica);
 
     // Creo el epoll
