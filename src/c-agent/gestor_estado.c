@@ -70,26 +70,18 @@ int gestor_manejar_reserva(EstadoGlobal estado, char* nombre_recurso, int job_id
     return resultado;
 }
 
-void gestor_manejar_release(EstadoGlobal estado, char* nombre_recurso, int job_id, int cantidad, void (*avisar_red)(int, int)) {
-    pthread_mutex_lock(&estado->lock);
-
+static void manejar_release_aux(EstadoGlobal estado, char* nombre_recurso, int job_id, int cantidad, void (*avisar_red)(int, int)) {
     RecursoLocal rec = obtener_recurso(estado, nombre_recurso);
-    // ¡CORRECCIÓN!: Desbloqueamos antes del return de emergencia
-    if (!rec || cantidad <= 0) {
-        pthread_mutex_unlock(&estado->lock); 
-        return; 
-    }
+    if (!rec || cantidad <= 0) return;
 
+    // Liberar solo lo que realmente tiene asignado en el libro contable
     int liberado = registrar_liberacion(estado->libro_contable, job_id, nombre_recurso, cantidad);
-    if (liberado == 0) {
-        pthread_mutex_unlock(&estado->lock); // ¡CORRECCIÓN!
-        return; 
-    }
+    if (liberado == 0) return; // Nada que liberar
 
-    // Devolver solo lo liberado a la disponibilidad
+    // El oro vuelve a la bóveda
     rec->disponible += liberado;
 
-    // Atender solicitudes pendientes (igual que antes, pero con el valor correcto)
+    // Revisamos la fila de este recurso específico y repartimos al siguiente en espera
     while (!cola_es_vacia(rec->pendientes)) {
         SolicitudPendiente solicitud = (SolicitudPendiente)cola_inicio(rec->pendientes, no_copia_solicitud);
         if (solicitud == NULL) break;
@@ -103,31 +95,44 @@ void gestor_manejar_release(EstadoGlobal estado, char* nombre_recurso, int job_i
             break;
         }
     }
+}
+
+void gestor_manejar_release(EstadoGlobal estado, char* nombre_recurso, int job_id, int cantidad, void (*avisar_red)(int, int)) {
+    pthread_mutex_lock(&estado->lock);
+    
+    manejar_release_aux(estado, nombre_recurso, job_id, cantidad, avisar_red);
+    
     pthread_mutex_unlock(&estado->lock);
 }
 
 
 void gestor_liberar_job(EstadoGlobal estado, int job_id, void (*avisar_red)(int, int)) {
-    // Leemos cuánto tiene asignado este job antes de soltar el lock
     struct jobActivo_ busqueda;
     busqueda.job_id = job_id;
 
     pthread_mutex_lock(&estado->lock);
+
+    // Buscamos el trabajo directamente bajo la seguridad del lock
     JobActivo job = tablahash_buscar(estado->libro_contable->tabla, &busqueda);
     if (!job) {
         pthread_mutex_unlock(&estado->lock);
         printf("[GESTOR] JOB_RELEASE: job %d no encontrado en el libro contable\n", job_id);
         return;
     }
+
+    // Guardamos las deudas actuales en variables locales
     int cpu = job->cpu_usada;
     int gpu = job->gpu_usada;
     int mem = job->mem_usada;
-    pthread_mutex_unlock(&estado->lock);
 
-    // gestor_manejar_release toma su propio lock, no hay deadlock
-    if (cpu > 0) gestor_manejar_release(estado, "cpu", job_id, cpu, avisar_red);
-    if (gpu > 0) gestor_manejar_release(estado, "gpu", job_id, gpu, avisar_red);
-    if (mem > 0) gestor_manejar_release(estado, "mem", job_id, mem, avisar_red);
+    // Ejecutamos las tres liberaciones de manera consecutiva y atómica
+    // Cada llamada interna buscará al job por su ID de manera segura, 
+    // y la última llamada destruirá la ficha del trabajo al quedar sus deudas en 0.
+    if (cpu > 0) manejar_release_aux(estado, "cpu", job_id, cpu, avisar_red);
+    if (gpu > 0) manejar_release_aux(estado, "gpu", job_id, gpu, avisar_red);
+    if (mem > 0) manejar_release_aux(estado, "mem", job_id, mem, avisar_red);
+
+    pthread_mutex_unlock(&estado->lock);
 }
 
 void gestor_expirar_pedidos(EstadoGlobal estado, void (*avisar_timeout)(int, int)) {
