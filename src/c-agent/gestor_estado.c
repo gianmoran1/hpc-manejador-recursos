@@ -34,6 +34,7 @@ void estado_destruir(EstadoGlobal estado) {
     recurso_destruir(estado->cpu);
     recurso_destruir(estado->gpu);
     recurso_destruir(estado->mem);
+    pthread_mutex_destroy(&estado->lock);
     destruir_tabla_jobs(estado->libro_contable);
     destruir_tabla_nodos(estado->registro_nodos);
     free(estado);
