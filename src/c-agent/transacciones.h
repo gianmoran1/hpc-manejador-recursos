@@ -14,7 +14,6 @@ typedef struct peticionMulti_ {
     int        total;           /* cuántos RESERVE se enviaron */
     int        respondidos;     /* cuántos ya respondieron */
     NodoReserva nodos[16];      /* máx. 16 recursos por job */
-    struct peticionMulti_ *sig;
 } *PeticionMulti;
 
 PeticionMulti peticion_crear(int job_id, int socket_erlang, int total);

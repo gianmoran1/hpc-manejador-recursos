@@ -8,7 +8,6 @@ PeticionMulti peticion_crear(int job_id, int socket_erlang, int total) {
     p->socket_erlang = socket_erlang;
     p->total        = total;
     p->respondidos  = 0;
-    p->sig          = NULL;
     memset(p->nodos, 0, sizeof(p->nodos));
     return p;
 }

@@ -7,6 +7,7 @@
 #include "jobs.h"
 #include "nodos.h"
 #include "transacciones.h"
+#include "tablahash.h"
 #include <pthread.h>
 
 typedef struct estadoGlobal_ {
@@ -15,7 +16,7 @@ typedef struct estadoGlobal_ {
     RecursoLocal mem;
     TablaJobs libro_contable;
     TablaNodos registro_nodos;
-    PeticionMulti peticiones_pendientes;
+    TablaHash peticiones_pendientes;
     pthread_mutex_t lock;
 } *EstadoGlobal;
 
