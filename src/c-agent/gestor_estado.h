@@ -31,9 +31,7 @@ int gestor_manejar_reserva(EstadoGlobal estado, char* nombre_recurso, int job_id
 /*maneja la liberación de un recurso (release), Requiere pasar una función de callback (void cb_red(int job_id, int socket_origen)
 para enviar de forma asíncrona el mensaje GRANTED por TCP a los sockets que correspondan*/
 void gestor_manejar_release(EstadoGlobal estado, char* nombre_recurso, int job_id, int cantidad, void (*avisar_red)(int, int));
-
-/*expira pedidos pendientes que superen el tiempo de espera, 
-funcion a llamar cada x tiempo desde el loop de epoll*/
+void gestor_liberar_job(EstadoGlobal estado, int job_id, void (*avisar_red)(int, int));
 void gestor_expirar_pedidos(EstadoGlobal estado, void (*avisar_timeout)(int, int));
 
 /*maneja la desconexión de un socket, liberando todos los recursos asociados a ese socket y avisando a los clientes afectados */

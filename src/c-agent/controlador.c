@@ -6,6 +6,16 @@
 #include "Sockets.h"      // Para enviar_mensaje_tcp y conectar_a_nodo
 #include "gestor_estado.h"// La magia de tu compañero Santos
 
+// Estado global definido en Agente.c
+extern EstadoGlobal estado;
+
+// Callback que usa el gestor para notificar a un cliente que su job pendiente fue concedido
+static void callback_job_granted(int job_id, int socket_fd) {
+    char msj[64];
+    snprintf(msj, sizeof(msj), "JOB_GRANTED %d\n", job_id);
+    enviar_mensaje_tcp(socket_fd, msj);
+}
+
 // =========================================================================
 // INTERFAZ CON ERLANG (Comunicación Local)
 // =========================================================================
@@ -20,56 +30,85 @@ void procesar_mensaje_erlang(ClienteConectado *cliente, char* msg) {
 
     if (parseados >= 1) {
 
-        if (strcmp(comando, "JOB_REQUEST") == 0 && parseados == 3) {
-            printf("[CONTROLADOR] Erlang pide: Trabajo %d, Recursos: %s\n", job_id, recursos);
-            
-
-            // 1. INTERACCIÓN CON SANTOS: Buscamos quién tiene esto
-            char ip_destino[16];
-            // santos_obtener_ip_para_recursos(recursos, ip_destino);
-
-            // MOCK TEMPORAL (Borrar cuando Santos tenga su función)
-            strcpy(ip_destino, "192.168.0.50"); 
-
-            if (ip_destino[0] == '\0') {
-                printf("[CONTROLADOR] No hay nodos con los recursos %s en la red.\n", recursos);
-                char error[64];
-                snprintf(error, sizeof(error), "JOB_STATUS %d FAILED\n", job_id);
-                enviar_mensaje_tcp(cliente->fd, error);
-                return;
+        // Erlang pide la tabla de nodos conocidos para calcular los recursos del cluster
+        if (strcmp(comando, "GET_NODES") == 0 && parseados == 1) {
+            char *nodos = gestor_get_nodes(estado);
+            if (nodos != NULL) {
+                // Extendemos el buffer una posición para agregar el \n y enviar todo en un solo send
+                size_t len = strlen(nodos);
+                char *nodos_nl = realloc(nodos, len + 2);
+                if (nodos_nl != NULL) {
+                    nodos_nl[len]     = '\n';
+                    nodos_nl[len + 1] = '\0';
+                    enviar_mensaje_tcp(cliente->fd, nodos_nl);
+                }
+                free(nodos_nl);
             }
+            return;
+        }
 
-            // 2. INTERACCIÓN CON RED: Buscamos si ya tenemos el enchufe abierto
-            // int fd_destino = santos_obtener_fd_por_ip(ip_destino);
-            int fd_destino = -1; // MOCK
+        // Erlang envía: JOB_REQUEST <id> @IP:recurso:cant [@IP2:recurso2:cant2 ...]
+        // Cada token describe un pedazo del trabajo en un nodo concreto de la red
+        if (strcmp(comando, "JOB_REQUEST") == 0 && parseados >= 2) {
+            printf("[CONTROLADOR] Erlang pide trabajo %d\n", job_id);
 
-            if (fd_destino == -1) {
-                // No hay conexión previa. Usamos tu plomería de Sockets.c
-                fd_destino = conectar_a_nodo(ip_destino, PUERTO_TCP);
+            // Avanzamos el cursor hasta el primer token @IP:..., saltando "JOB_REQUEST <id> "
+            const char *cursor = msg;
+            while (*cursor && *cursor != ' ') cursor++; // salta "JOB_REQUEST"
+            while (*cursor == ' ') cursor++;             // salta espacios
+            while (*cursor && *cursor != ' ') cursor++; // salta el job_id
+            while (*cursor == ' ') cursor++;             // queda apuntando al primer token
+
+            char token[128];
+            while (sscanf(cursor, "%127s", token) == 1) {
+                char ip_destino[50], nombre_recurso[32];
+                int cantidad;
+
+                if (sscanf(token, "@%49[^:]:%31[^:]:%d", ip_destino, nombre_recurso, &cantidad) != 3) {
+                    printf("[CONTROLADOR] Token mal formado en JOB_REQUEST: '%s'\n", token);
+                    char msj_fmt[64];
+                    snprintf(msj_fmt, sizeof(msj_fmt), "JOB_DENIED %d\n", job_id);
+                    enviar_mensaje_tcp(cliente->fd, msj_fmt);
+                    return;
+                }
+
+                // Intentamos reutilizar una conexión existente; si no, abrimos una nueva
+                // int fd_destino = santos_obtener_fd_por_ip(ip_destino);
+                int fd_destino = -1; // MOCK: reemplazar con lookup en tabla de nodos
+
+                if (fd_destino == -1) {
+                    fd_destino = conectar_a_nodo(ip_destino, PUERTO_TCP);
+                    if (fd_destino != -1) {
+                        ClienteConectado *nuevo_nodo = crear_cliente_conectado(fd_destino, 0);
+                        agregar_cliente_en_epoll(nuevo_nodo, EPOLLIN | EPOLLONESHOT);
+                        // santos_registrar_fd_para_ip(ip_destino, fd_destino);
+                    }
+                }
 
                 if (fd_destino != -1) {
-                    // ¡Vital! Lo registramos en tu epoll para escuchar la respuesta
-                    ClienteConectado *nuevo_nodo = crear_cliente_conectado(fd_destino, 0); // 0 = Red C
-                    agregar_cliente_en_epoll(nuevo_nodo, EPOLLIN | EPOLLONESHOT);
-
-                    // Avisamos a Santos que guarde este nuevo tubo en su libreta
-                    // santos_registrar_fd_para_ip(ip_destino, fd_destino);
+                    // Le pedimos al nodo remoto que reserve su porción del trabajo
+                    char msj_red[128];
+                    snprintf(msj_red, sizeof(msj_red), "RESERVE %d %s:%d\n", job_id, nombre_recurso, cantidad);
+                    enviar_mensaje_tcp(fd_destino, msj_red);
+                } else {
+                    // No se pudo alcanzar el nodo; cancelamos todo el trabajo
+                    char msj_error[64];
+                    snprintf(msj_error, sizeof(msj_error), "JOB_DENIED %d\n", job_id);
+                    enviar_mensaje_tcp(cliente->fd, msj_error);
+                    return;
                 }
-            }
 
-            // 3. ENVÍO DE LA ORDEN
-            if (fd_destino != -1) {
-                char msj_red[256];
-                snprintf(msj_red, sizeof(msj_red), "RESERVE %d %s\n", job_id, recursos);
-                enviar_mensaje_tcp(fd_destino, msj_red);
-            } else {
-                // El nodo al que intentamos conectar está muerto
-                char msj_error[64];
-                snprintf(msj_error, sizeof(msj_error), "JOB_DENIED %d\n", job_id);
-                // ARMAR EL DENIED 
-                enviar_mensaje_tcp(cliente->fd, msj_error);
+                // Avanzamos al siguiente token
+                while (*cursor && *cursor != ' ') cursor++;
+                while (*cursor == ' ') cursor++;
             }
         }
+        // Erlang avisa que el trabajo terminó: liberamos los recursos locales
+        // y drenamos la cola de pendientes vía callback_job_granted
+        else if (strcmp(comando, "JOB_RELEASE") == 0 && parseados == 2) {
+            gestor_liberar_job(estado, job_id, callback_job_granted);
+        }
+
         else {
             printf("[CONTROLADOR] Comando de Erlang no reconocido o mal formado: %s\n", msg);
         }
@@ -115,7 +154,7 @@ void procesar_mensaje_red_c(ClienteConectado *cliente, char* msg) {
             // Avisamos a Erlang (usamos la variable global erlangSocket que expusimos en Agente.h)
             if (erlangSocket != -1) {
                 char msj_ok[64];
-                snprintf(msj_ok, sizeof(msj_ok), "JOB_STATUS %d OK\n", job_id);
+                snprintf(msj_ok, sizeof(msj_ok), "JOB_GRANTED %d\n", job_id);
                 enviar_mensaje_tcp(erlangSocket, msj_ok);
             }
         }
@@ -125,7 +164,7 @@ void procesar_mensaje_red_c(ClienteConectado *cliente, char* msg) {
             
             if (erlangSocket != -1) {
                 char msj_fail[64];
-                snprintf(msj_fail, sizeof(msj_fail), "JOB_STATUS %d FAILED\n", job_id);
+                snprintf(msj_fail, sizeof(msj_fail), "JOB_DENIED %d\n", job_id);
                 enviar_mensaje_tcp(erlangSocket, msj_fail);
             }
         }

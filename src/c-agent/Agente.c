@@ -44,6 +44,7 @@ int usock_udp;
 int erlangSocket = -1;
 int timer_anuncios_fd;
 char mi_ip_publica[16]; // Para guardar mi IP pública y usarla en los anuncios
+EstadoGlobal estado = NULL;
 
 
 

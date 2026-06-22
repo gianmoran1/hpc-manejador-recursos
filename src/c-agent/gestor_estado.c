@@ -107,6 +107,29 @@ void gestor_manejar_release(EstadoGlobal estado, char* nombre_recurso, int job_i
 }
 
 
+void gestor_liberar_job(EstadoGlobal estado, int job_id, void (*avisar_red)(int, int)) {
+    // Leemos cuánto tiene asignado este job antes de soltar el lock
+    struct jobActivo_ busqueda;
+    busqueda.job_id = job_id;
+
+    pthread_mutex_lock(&estado->lock);
+    JobActivo job = tablahash_buscar(estado->libro_contable->tabla, &busqueda);
+    if (!job) {
+        pthread_mutex_unlock(&estado->lock);
+        printf("[GESTOR] JOB_RELEASE: job %d no encontrado en el libro contable\n", job_id);
+        return;
+    }
+    int cpu = job->cpu_usada;
+    int gpu = job->gpu_usada;
+    int mem = job->mem_usada;
+    pthread_mutex_unlock(&estado->lock);
+
+    // gestor_manejar_release toma su propio lock, no hay deadlock
+    if (cpu > 0) gestor_manejar_release(estado, "cpu", job_id, cpu, avisar_red);
+    if (gpu > 0) gestor_manejar_release(estado, "gpu", job_id, gpu, avisar_red);
+    if (mem > 0) gestor_manejar_release(estado, "mem", job_id, mem, avisar_red);
+}
+
 void gestor_expirar_pedidos(EstadoGlobal estado, void (*avisar_timeout)(int, int)) {
     pthread_mutex_lock(&estado->lock);
     time_t ahora = time(NULL);
