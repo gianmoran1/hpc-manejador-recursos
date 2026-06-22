@@ -10,11 +10,11 @@
 extern EstadoGlobal estado;
 
 // Callback que usa el gestor para notificar a un cliente que su job pendiente fue concedido
-static void callback_job_granted(int job_id, int socket_fd) {
-    char msj[64];
-    snprintf(msj, sizeof(msj), "JOB_GRANTED %d\n", job_id);
-    enviar_mensaje_tcp(socket_fd, msj);
-}
+// static void callback_job_granted(int job_id, int socket_fd) {
+//     char msj[64];
+//     snprintf(msj, sizeof(msj), "JOB_GRANTED %d\n", job_id);
+//     enviar_mensaje_tcp(socket_fd, msj);
+// }
 
 // =========================================================================
 // INTERFAZ CON ERLANG (Comunicación Local)
@@ -35,18 +35,14 @@ void procesar_mensaje_erlang(ClienteConectado *cliente, char* msg) {
             char *nodos = gestor_get_nodes(estado);
             if (nodos != NULL) {
                 // Extendemos el buffer una posición para agregar el \n y enviar todo en un solo send
-                size_t len = strlen(nodos);
-                char *nodos_nl = realloc(nodos, len + 2);
-                if (nodos_nl != NULL) {
-                    nodos_nl[len]     = '\n';
-                    nodos_nl[len + 1] = '\0';
-                    enviar_mensaje_tcp(cliente->fd, nodos_nl);
-                }
-                free(nodos_nl);
+                // size_t len = strlen(nodos);
+                enviar_mensaje_tcp(cliente->fd, nodos);
+                free(nodos);
             }
+            printf("nodos enviados a erlang");
+
             return;
         }
-
         // Erlang envía: JOB_REQUEST <id> @IP:recurso:cant [@IP2:recurso2:cant2 ...]
         // Cada token describe un pedazo del trabajo en un nodo concreto de la red
         if (strcmp(comando, "JOB_REQUEST") == 0 && parseados >= 2) {
@@ -73,22 +69,22 @@ void procesar_mensaje_erlang(ClienteConectado *cliente, char* msg) {
                 }
 
                 // Intentamos reutilizar una conexión existente; si no, abrimos una nueva
-                // int fd_destino = santos_obtener_fd_por_ip(ip_destino);
+                // int fd_destino = santos_obtener_fd_por_ip(ip_destino); (gestor_estado)
                 int fd_destino = -1; // MOCK: reemplazar con lookup en tabla de nodos
-
+                // Maxi: Creo que el puerto es dinamico, tambien lo devolveria la funcion de santos lookup en tabla de nodos, ya que la constante PUERTO_TCP es nustro puerto y no el del otro nodo
                 if (fd_destino == -1) {
                     fd_destino = conectar_a_nodo(ip_destino, PUERTO_TCP);
                     if (fd_destino != -1) {
                         ClienteConectado *nuevo_nodo = crear_cliente_conectado(fd_destino, 0);
                         agregar_cliente_en_epoll(nuevo_nodo, EPOLLIN | EPOLLONESHOT);
-                        // santos_registrar_fd_para_ip(ip_destino, fd_destino);
+                        // santos_registrar_fd_para_ip(ip_destino, fd_destino); (gestor_estado)
                     }
                 }
 
                 if (fd_destino != -1) {
                     // Le pedimos al nodo remoto que reserve su porción del trabajo
                     char msj_red[128];
-                    snprintf(msj_red, sizeof(msj_red), "RESERVE %d %s:%d\n", job_id, nombre_recurso, cantidad);
+                    snprintf(msj_red, sizeof(msj_red), "RESERVE %d %s %d\n", job_id, nombre_recurso, cantidad);
                     enviar_mensaje_tcp(fd_destino, msj_red);
                 } else {
                     // No se pudo alcanzar el nodo; cancelamos todo el trabajo
@@ -106,7 +102,8 @@ void procesar_mensaje_erlang(ClienteConectado *cliente, char* msg) {
         // Erlang avisa que el trabajo terminó: liberamos los recursos locales
         // y drenamos la cola de pendientes vía callback_job_granted
         else if (strcmp(comando, "JOB_RELEASE") == 0 && parseados == 2) {
-            gestor_liberar_job(estado, job_id, callback_job_granted);
+            // gestor_liberar_job(estado, job_id, callback_job_granted);
+            printf("liberar %d", job_id);
         }
 
         else {
@@ -132,7 +129,7 @@ void procesar_mensaje_red_c(ClienteConectado *cliente, char* msg) {
         if (strcmp(comando, "RESERVE") == 0 && parseados == 3) {
             printf("[CONTROLADOR] El FD %d intenta reservar localmente %s para el trabajo %d\n", cliente->fd, recursos, job_id);
 
-            // Preguntamos a Santos si la compu física tiene esto disponible
+            // Preguntamos a Santos (gestor_estado) si la compu física tiene esto disponible
             // int lugar_disponible = santos_intentar_reservar_local(recursos);
             int lugar_disponible = 1; // MOCK
 

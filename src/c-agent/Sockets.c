@@ -1,6 +1,10 @@
 #include "Sockets.h"
 
 
+extern char mi_ip_publica[16]; // Para guardar mi IP pública y usarla en los anuncios
+;
+
+
 
 void quit(char *s)
 {
@@ -193,10 +197,6 @@ int atender_cliente_tcp(ClienteConectado *cliente) {
             printf("[FD %d] Error: Mensaje demasiado largo sin '\\n'. Desconectando por seguridad.\n", cliente->fd);
             return 0;
             
-            // // if (!cliente->es_erlang) santos_eliminar_nodo(cliente->fd);
-            // close(cliente->fd);
-            // free(cliente);
-            // return;
         }
 
         // Leemos de la red y lo guardamos DIRECTAMENTE al final de lo que ya teníamos
@@ -249,7 +249,7 @@ int atender_cliente_udp(int usock_udp, char *buffer_destino, size_t tamaño_maxi
     inet_ntop(AF_INET, &(src_addr.sin_addr), ip_remitente, INET_ADDRSTRLEN);
 
     // Si es nuestro propio eco, avisamos que no hay nada interesante
-    // if (strcmp(ip_remitente, mi_ip_publica) == 0) return 0;
+    if (strcmp(ip_remitente, mi_ip_publica) == 0) return 0;
     
     // Escribimos el resultado directamente en la variable del llamador
     snprintf(buffer_destino, tamaño_maximo, "%s %s", ip_remitente, buffer_red);
