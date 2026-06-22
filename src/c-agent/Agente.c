@@ -158,6 +158,9 @@ void* bucle_principal(void* args) {
         }
 
         for (int n = 0; n < nfds; ++n) {
+
+            ClienteConectado *entidad = (ClienteConectado *) eventos[n].data.ptr;
+            int fd_listo = entidad->fd;
             int fd_listo = eventos[n].data.fd;  
 
             // si el evento esta en un socket de escucha, es porque hay una nueva conexión queriendo entrar. 
@@ -261,10 +264,12 @@ int main() {
     timer_anuncios_fd = mk_timer(5); // Creamos el timer cada 5 segundos
     
     // Registro los sockets de entrada y el timer en el epoll
-    agregar_fd_en_epoll(lsock_publico, EPOLLIN | EPOLLEXCLUSIVE);
-    agregar_fd_en_epoll(lsock_local, EPOLLIN | EPOLLEXCLUSIVE);
-    agregar_fd_en_epoll(usock_udp, EPOLLIN | EPOLLEXCLUSIVE);
-    agregar_fd_en_epoll(timer_anuncios_fd, EPOLLIN | EPOLLEXCLUSIVE);
+    agregar_cliente_en_epoll(crear_cliente_conectado(lsock_publico, 0), EPOLLIN | EPOLLEXCLUSIVE);
+    agregar_cliente_en_epoll(crear_cliente_conectado(lsock_local, 0), EPOLLIN | EPOLLEXCLUSIVE);
+    agregar_cliente_en_epoll(crear_cliente_conectado(usock_udp, 0), EPOLLIN | EPOLLEXCLUSIVE);
+    agregar_cliente_en_epoll(crear_cliente_conectado(timer_anuncios_fd, 0), EPOLLIN | EPOLLEXCLUSIVE);
+    
+    
 
     printf("Servidor HPC iniciado. Escuchando en puerto %d...\n", PUERTO_TCP);
 
