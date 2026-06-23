@@ -47,6 +47,7 @@ int lsock_local;
 int usock_udp;
 int erlangSocket = -1;
 int timer_anuncios_fd;
+int timer_timeout;
 char mi_ip_publica[16];
 EstadoGlobal estado = NULL;
 // EL ESTADO ES NULL CUANDO LLEGA UN MENSAJE TCP? 
@@ -190,16 +191,17 @@ void* bucle_principal(void* args) {
                 if (!valido) continue;
 
                 printf("¡ANNOUNCE UDP recibido: %s\n", buffer_udp);
-
-                // Formato: "IP_REMITENTE ANNOUNCE IP_NODE PUERTO cpu:X [gpu:Y] [mem:Z]"
-                char ip_rem[50], cmd[32], ip_node[50];
+                // ------------------------------------------------------------------------
+                // HACER ESTE PARSEO EN UNA FUNCION AUXILIAR DENTRO DE CONTROLADOR.C Y QUE ESTA DEVUELVA LOS PARAMETROS A PASAR LUEGO EN GESTOR_PROCESAR_ANUNCIO
+                // Formato: "IP_REMITENTE ANNOUNCE PUERTO cpu:X [gpu:Y] [mem:Z]"
+                char ip_node[50], cmd[32]; // ip_node[50];
                 int puerto_node = 0, cpu = 0, gpu = 0, mem = 0;
-                int n = sscanf(buffer_udp, "%49s %31s %49s %d",
-                               ip_rem, cmd, ip_node, &puerto_node);
-                if (n == 4 && strcmp(cmd, "ANNOUNCE") == 0) {
+                int n = sscanf(buffer_udp, "%49s %31s %d",
+                               ip_node, cmd, &puerto_node);
+                if (n == 3 && strcmp(cmd, "ANNOUNCE") == 0) {
                     // Avanzar el cursor hasta los tokens de recursos
                     const char *ptr = buffer_udp;
-                    for (int i = 0; i < 4; i++) {
+                    for (int i = 0; i < 3; i++) {
                         while (*ptr && *ptr != ' ') ptr++;
                         while (*ptr == ' ') ptr++;
                     }
@@ -214,6 +216,8 @@ void* bucle_principal(void* args) {
                         while (*ptr && *ptr != ' ') ptr++;
                         while (*ptr == ' ') ptr++;
                     }
+                // --------------------------------------------------------------------------------
+                    printf("%s %d cpu:%d gpu:%d mem:%d\n", ip_node, puerto_node, cpu, gpu, mem);
                     gestor_procesar_anuncio(estado, ip_node, puerto_node, cpu, gpu, mem);
                 }
             } 
@@ -223,13 +227,8 @@ void* bucle_principal(void* args) {
 
                 uint64_t expiraciones;
                 read(timer_anuncios_fd, &expiraciones, sizeof(expiraciones));
-
-                // Expirar peticiones de RESERVE que llevan más de 30s esperando (anti-deadlock)
-                gestor_expirar_pedidos(estado, notificar_denied_timeout);
-
-                // Desconectar nodos que no enviaron ANNOUNCE en los últimos 15s
-                gestor_desconectar_nodos(estado);
-
+                // -----------------------------------------------------------------------------------------
+                // ESTARIA BUENO QUE ESTE PEDIDO DE RECURSOS DISPONIBLES SE HAGA DENTRO DE UNA FUNCION AUXILIAR DENTRO DE GESTOR_ESTADO, PARA NO METER MUTEX ACA
                 // Anunciar los recursos disponibles actuales (no totales hardcodeados)
                 char msj[256];
                 pthread_mutex_lock(&estado->lock);
@@ -237,13 +236,21 @@ void* bucle_principal(void* args) {
                 int disp_gpu = estado->gpu->disponible;
                 int disp_mem = estado->mem->disponible;
                 pthread_mutex_unlock(&estado->lock);
-
-                snprintf(msj, sizeof(msj), "ANNOUNCE %s %d cpu:%d gpu:%d mem:%d\n",
-                         mi_ip_publica, PUERTO_TCP, disp_cpu, disp_gpu, disp_mem);
+                // --------------------------------------------------------------------------------------
+                snprintf(msj, sizeof(msj), "ANNOUNCE %d cpu:%d gpu:%d mem:%d\n",
+                        PUERTO_TCP, disp_cpu, disp_gpu, disp_mem);
                 enviar_mensaje_udp(usock_udp, "255.255.255.255", PUERTO_UDP, msj);
 
-                // Actualizar nuestra propia entrada (el eco UDP lo filtramos, así que lo hacemos directo)
-                gestor_procesar_anuncio(estado, mi_ip_publica, PUERTO_TCP, disp_cpu, disp_gpu, disp_mem);
+            }
+            else if (fd_listo == timer_timeout){
+                uint64_t expiraciones;
+                read(timer_timeout, &expiraciones, sizeof(expiraciones));
+
+                // Expirar peticiones de RESERVE que llevan más de 30s esperando (anti-deadlock)
+                gestor_expirar_pedidos(estado, notificar_denied_timeout);
+
+                // Desconectar nodos que no enviaron ANNOUNCE en los últimos 15s
+                gestor_desconectar_nodos(estado);
             }
 
             // Es un cliente que ya estaba conectado mandando texto (RESERVE, JOB_REQUEST, etc)
@@ -262,6 +269,7 @@ void* bucle_principal(void* args) {
                         // Evitar que nodo_destruir intente close+free de un ClienteConectado
                         // que ya vamos a liberar nosotros justo debajo.
                         nodo_limpiar_conexion_por_fd(cliente->fd, estado->registro_nodos);
+                        // SE PODRIA HACER FUNCION QUE ELIMINE DE LA TABLA AL NODO ASOCIADO AL FD 
                     }
                     close(cliente->fd);
                     free(cliente);
@@ -303,13 +311,14 @@ int main() {
     lsock_local   = mk_tcp_lsock(PUERTO_TCP, "127.0.0.1"); 
     usock_udp     = mk_udp_lsock(PUERTO_UDP);
     timer_anuncios_fd = mk_timer(5); // Creamos el timer cada 5 segundos
+    timer_timeout = mk_timer(15);
     
     // Registro los sockets de entrada y el timer en el epoll
     agregar_cliente_en_epoll(crear_cliente_conectado(lsock_publico, 0), EPOLLIN | EPOLLEXCLUSIVE);
     agregar_cliente_en_epoll(crear_cliente_conectado(lsock_local, 0), EPOLLIN | EPOLLEXCLUSIVE);
     agregar_cliente_en_epoll(crear_cliente_conectado(usock_udp, 0), EPOLLIN | EPOLLEXCLUSIVE);
     agregar_cliente_en_epoll(crear_cliente_conectado(timer_anuncios_fd, 0), EPOLLIN | EPOLLEXCLUSIVE);
-    
+    agregar_cliente_en_epoll(crear_cliente_conectado(timer_timeout,0), EPOLLIN | EPOLLEXCLUSIVE);
     
 
     printf("Servidor HPC iniciado. Escuchando en puerto %d...\n", PUERTO_TCP);

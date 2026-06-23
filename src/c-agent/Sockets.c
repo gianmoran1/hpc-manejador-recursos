@@ -246,11 +246,9 @@ int atender_cliente_udp(int usock_udp, char *buffer_destino, size_t tamaño_maxi
     
     char ip_remitente[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &(src_addr.sin_addr), ip_remitente, INET_ADDRSTRLEN);
-
-    // Si es nuestro propio eco, avisamos que no hay nada interesante
-    if (strcmp(ip_remitente, mi_ip_publica) == 0) return 0;
     
     // Escribimos el resultado directamente en la variable del llamador
+    // Armo el mensaje como ip ANNOUNCE puerto recursos
     snprintf(buffer_destino, tamaño_maximo, "%s %s", ip_remitente, buffer_red);
 
     return 1; 
