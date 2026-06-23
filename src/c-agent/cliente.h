@@ -8,7 +8,12 @@ typedef struct {
     int bytes_leidos;       // Cuántos bytes llevamos acumulados
 } ClienteConectado;
 
-
+/*
+ * Reserva memoria e inicializa la estructura de un nuevo cliente.
+ * Recibe el file descriptor del socket asociado al cliente y un valor de 1 
+ * si la conexión proviene del nodo local de Erlang, o 0 si es un nodo de red C.
+ * Devuelve un puntero a la nueva estructura ClienteConectado inicializada.
+ */
 ClienteConectado* crear_cliente_conectado(int fd, int es_erlang);
 
 
