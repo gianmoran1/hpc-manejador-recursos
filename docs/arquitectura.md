@@ -88,8 +88,8 @@ Si algún nodo responde `DENIED`, Agente A envía `RELEASE` a **todos** los nodo
 Un deadlock puede ocurrir cuando dos agentes se esperan mutuamente para recursos ocupados. La estrategia implementada es **timeout + backoff en Erlang**:
 
 1. Cuando un RESERVE no puede cumplirse de inmediato, la solicitud queda en la cola del recurso con su `instante_llegada`.
-2. El timer de expiración (cada 15 s) llama a `gestor_expirar_pedidos`. Si un pedido supera `TIEMPO_ESPERA` (30 s por defecto), se lo saca de la cola y se dispara el callback que envía `DENIED <id>` al agente coordinador que originó el RESERVE.
-3. El agente coordinador que recibe `DENIED` ejecuta rollback (envía `RELEASE` a todos sus nodos) y notifica `JOB_DENIED <id>` a Erlang.
+2. El timer de expiración (cada 15 s) llama a `gestor_expirar_pedidos`. Si un pedido supera `TIEMPO_ESPERA` (30 s por defecto), se lo saca de la cola y se dispara el callback que envía `TIMEOUT <id>` al agente coordinador que originó el RESERVE.
+3. El agente coordinador que recibe `TIMEOUT` ejecuta rollback (envía `RELEASE` a todos sus nodos) y notifica `JOB_TIMEOUT <id>` a Erlang.
 4. Erlang aplica backoff aleatorio y reintenta con `JOB_REQUEST`.
 
 ---

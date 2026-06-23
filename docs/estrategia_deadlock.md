@@ -16,7 +16,7 @@ que originó el `RESERVE`. Ese coordinador ejecuta rollback (envía `RELEASE` a 
 notifica al planificador Erlang con `JOB_DENIED <job_id>`.
 
 **Reacción (planificador Erlang):**  
-Al recibir `JOB_DENIED` (originado por el timeout), el worker del job afectado ejecuta tres pasos:
+Al recibir `JOB_TIMEOUT` (originado por el timeout), el worker del job afectado ejecuta tres pasos:
 
 1. Registra el evento en el log: `[TIMEOUT] JobId:<id>`
 2. Espera una cantidad aleatoria de tiempo entre 1 y 3000 ms (`rand:uniform(3000)`)
