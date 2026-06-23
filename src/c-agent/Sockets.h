@@ -86,10 +86,10 @@ int atender_cliente_tcp(ClienteConectado *cliente);
 
 /*
  * Lee un datagrama UDP entrante y lo formatea con la IP del remitente.
- * Recibe el FD del socket UDP de escucha, el buffer de destino y su tamaño máximo.
+ * Recibe el FD del socket UDP de escucha, el buffer de destino y su tamano máximo.
  * Devuelve 1 si se extrajo un mensaje válido, o 0 si la red estaba vacía.
  */
-int atender_cliente_udp(int usock_udp, char *buffer_destino, size_t tamaño_maximo);
+int atender_cliente_udp(int usock_udp, char *buffer_destino, size_t tamano_maximo);
 
 /*
  * Envía de forma segura una cadena de texto a través de un socket TCP conectado.

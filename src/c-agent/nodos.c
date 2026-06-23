@@ -28,8 +28,7 @@ static void no_destruye(__attribute__((unused)) Nodo nodo){
 
 static int nodo_comparar(Nodo a, Nodo b){
     int cmp = strcmp(a->ip, b->ip);
-    if (cmp != 0) return cmp;
-    return a->puerto - b->puerto;
+    return cmp;
 }
 
 static unsigned nodo_hash(Nodo a){
@@ -38,7 +37,7 @@ static unsigned nodo_hash(Nodo a){
     for (hashval = 0; *s != '\0'; ++s) {
         hashval = *s + 31 * hashval;
     }
-    return hashval + a->puerto;
+    return hashval;
 }
 //-------------------------------------------------------------------------------------------------------------------------------------
 
@@ -149,7 +148,7 @@ void procesar_anuncio(TablaNodos tabla_nodos, char* ip, int puerto, int cpu, int
     struct nodo_ busqueda; //es local no hace falta liberarlo
     strncpy(busqueda.ip, ip, (sizeof(busqueda.ip) - 1));
     busqueda.ip[sizeof(busqueda.ip) - 1] = '\0';
-    busqueda.puerto = puerto;
+    // busqueda.puerto = puerto;
 
     
     Nodo encontrado = tablahash_buscar(tabla_nodos->tabla, &busqueda);
@@ -233,6 +232,20 @@ static Nodo buscar_nodo_ptr(char* ip, int puerto, TablaNodos tabla_nodos) {
 ClienteConectado* nodo_obtener_conexion(char* ip, int puerto, TablaNodos tabla_nodos) {
     Nodo n = buscar_nodo_ptr(ip, puerto, tabla_nodos);
     return (n != NULL) ? n->conexion : NULL;
+}
+int nodo_obtener_puerto(char* ip, int puerto, TablaNodos tabla_nodos) {
+    printf("Buscando puerto...\n");
+    printf("IP: %s\n", ip);
+    //crea un nodo de busqueda
+    struct nodo_ busqueda; //es local no hace falta liberarlo
+    strncpy(busqueda.ip, ip, (sizeof(busqueda.ip) - 1));
+    busqueda.ip[sizeof(busqueda.ip) - 1] = '\0';
+    // busqueda.puerto = puerto;
+
+    Nodo encontrado = tablahash_buscar(tabla_nodos->tabla, &busqueda);
+    if(encontrado) printf("ENCONTRADO\n");
+    else printf("NO ENCONTRADO");
+    return encontrado->puerto;
 }
 
 void nodo_registrar_conexion(char* ip, int puerto, ClienteConectado* cliente, TablaNodos tabla_nodos) {

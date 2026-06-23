@@ -111,33 +111,22 @@ void procesar_mensaje_erlang(ClienteConectado *cliente, char* msg) {
             while (sscanf(cursor, "%127s", token) == 1) {
                 char ip_destino[50], nombre_recurso[32];
                 int cantidad;
-
+                
+                
                 if (sscanf(token, "@%49[^:]:%31[^:]:%d",
-                           ip_destino, nombre_recurso, &cantidad) != 3) {
-                    printf("[CONTROLADOR] Token mal formado en JOB_REQUEST: '%s'\n", token);
-                    rollback_y_denegar(job_id, cliente->fd, idx);
-                    return;
-                }
-
-                // Reutilizar conexión existente al nodo; si no hay, abrir una nueva y registrarla.
-                ClienteConectado *cx = nodo_obtener_conexion(ip_destino, PUERTO_TCP,
-                                                             estado->registro_nodos);
-                int fd_destino;
-                if (cx != NULL) {
-                    fd_destino = cx->fd;
-                } else {
-                    fd_destino = conectar_a_nodo(ip_destino, PUERTO_TCP);
-                    if (fd_destino != -1) {
-                        ClienteConectado *nueva = crear_cliente_conectado(fd_destino, 0);
-                        agregar_cliente_en_epoll(nueva, EPOLLIN | EPOLLONESHOT);
-                        nodo_registrar_conexion(ip_destino, PUERTO_TCP, nueva,
-                                                estado->registro_nodos);
+                    ip_destino, nombre_recurso, &cantidad) != 3) {
+                        printf("[CONTROLADOR] Token mal formado en JOB_REQUEST: '%s'\n", token);
+                        rollback_y_denegar(job_id, cliente->fd, idx);
+                        return;
                     }
-                }
+                    
+                int puerto_tcp = nodo_obtener_puerto(ip_destino, 0, estado->registro_nodos);
+                printf("PUERTO: %d\n", puerto_tcp);
+                
+                int fd_destino = conectar_a_nodo(ip_destino, puerto_tcp);
 
                 if (fd_destino == -1) {
-                    printf("[CONTROLADOR] No se pudo conectar a %s para job %d\n",
-                           ip_destino, job_id);
+                    printf("[CONTROLADOR] No se pudo conectar a %s para job %d\n",ip_destino, job_id);
                     rollback_y_denegar(job_id, cliente->fd, idx);
                     return;
                 }
