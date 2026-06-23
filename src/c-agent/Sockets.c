@@ -286,6 +286,6 @@ int enviar_mensaje_udp(int usock_udp, const char *ip_destino, int puerto_destino
     }
 
     // Como es UDP, no sabemos si el otro lo recibió, solo sabemos que salió de nuestra placa de red.
-    printf("Datagrama UDP enviado a %s:%d -> %s", ip_destino, puerto_destino, mensaje);
+    // printf("Datagrama UDP enviado a %s:%d -> %s", ip_destino, puerto_destino, mensaje);
     return 1;
 }

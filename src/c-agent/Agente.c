@@ -217,7 +217,7 @@ void* bucle_principal(void* args) {
                         while (*ptr == ' ') ptr++;
                     }
                 // --------------------------------------------------------------------------------
-                    printf("%s %d cpu:%d gpu:%d mem:%d\n", ip_node, puerto_node, cpu, gpu, mem);
+                    //printf("%s %d cpu:%d gpu:%d mem:%d\n", ip_node, puerto_node, cpu, gpu, mem);
                     gestor_procesar_anuncio(estado, ip_node, puerto_node, cpu, gpu, mem);
                 }
             } 
@@ -261,16 +261,16 @@ void* bucle_principal(void* args) {
                 int ret = atender_cliente_tcp(cliente);
                 if (ret == 0) {
                     // El socket se rompió o desconectó.
-                    if (cliente->es_erlang) {
-                        printf("ALERTA: Erlang (FD %d) se desconectó.\n", cliente->fd);
-                    } else {
+                    // if (cliente->es_erlang) {
+                    //     printf("ALERTA: Erlang (FD %d) se desconectó.\n", cliente->fd);
+                    // } else {
                         printf("Nodo de red (FD %d) desconectado. Liberando sus recursos...\n", cliente->fd);
                         manejar_desconexion_socket(estado, cliente->fd, callback_granted_red);
                         // Evitar que nodo_destruir intente close+free de un ClienteConectado
                         // que ya vamos a liberar nosotros justo debajo.
                         nodo_limpiar_conexion_por_fd(cliente->fd, estado->registro_nodos);
                         // SE PODRIA HACER FUNCION QUE ELIMINE DE LA TABLA AL NODO ASOCIADO AL FD 
-                    }
+                    // }
                     close(cliente->fd);
                     free(cliente);
                 }

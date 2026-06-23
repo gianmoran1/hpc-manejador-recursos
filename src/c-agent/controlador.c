@@ -40,7 +40,7 @@ static void rollback_y_denegar(int job_id, int socket_erlang, int n_enviados) {
 
     for (int i = 0; i < n; i++) {
         char msj[64];
-        snprintf(msj, sizeof(msj), "RELEASE %d %s:%d\n", job_id, recursos_rb[i], cantidades_rb[i]);
+        snprintf(msj, sizeof(msj), "RELEASE %d %s %d\n", job_id, recursos_rb[i], cantidades_rb[i]);
         enviar_mensaje_tcp(fds[i], msj);
     }
     char msj[64];
@@ -67,7 +67,7 @@ void procesar_mensaje_erlang(ClienteConectado *cliente, char* msg) {
                 enviar_mensaje_tcp(cliente->fd, nodos);
                 free(nodos);
             }
-            printf("nodos enviados a erlang\n");
+            // printf("nodos enviados a erlang\n");
             return;
         }
 
@@ -151,7 +151,7 @@ void procesar_mensaje_erlang(ClienteConectado *cliente, char* msg) {
                 idx++;
 
                 char msj_red[128];
-                snprintf(msj_red, sizeof(msj_red), "RESERVE %d %s:%d\n",
+                snprintf(msj_red, sizeof(msj_red), "RESERVE %d %s %d\n",
                          job_id, nombre_recurso, cantidad);
                 enviar_mensaje_tcp(fd_destino, msj_red);
 
@@ -180,7 +180,7 @@ void procesar_mensaje_erlang(ClienteConectado *cliente, char* msg) {
 
             for (int i = 0; i < n; i++) {
                 char msj[64];
-                snprintf(msj, sizeof(msj), "RELEASE %d %s:%d\n", job_id, recursos_jb[i], cantidades_jb[i]);
+                snprintf(msj, sizeof(msj), "RELEASE %d %s %d\n", job_id, recursos_jb[i], cantidades_jb[i]);
                 enviar_mensaje_tcp(fds[i], msj);
             }
         }
@@ -198,20 +198,21 @@ void procesar_mensaje_erlang(ClienteConectado *cliente, char* msg) {
 void procesar_mensaje_red_c(ClienteConectado *cliente, char* msg) {
     char comando[32];
     int job_id = -1;
-    char recursos[128];
-
-    int parseados = sscanf(msg, "%31s %d %127s", comando, &job_id, recursos);
+    char recurso[32];
+    int cant_res = 0;
+    int parseados = sscanf(msg, "%31s %d %31s %d", comando, &job_id, recurso, &cant_res);
 
     if (parseados >= 1) {
 
         // CASO 1: Otro agente nos pide reservar recursos nuestros
-        if (strcmp(comando, "RESERVE") == 0 && parseados == 3) {
-            printf("[CONTROLADOR] El FD %d intenta reservar localmente %s para el trabajo %d\n",
-                   cliente->fd, recursos, job_id);
+        if (strcmp(comando, "RESERVE") == 0 && parseados == 4) {
+            printf("[CONTROLADOR] El FD %d intenta reservar localmente %s %d para el trabajo %d\n",
+                   cliente->fd, recurso, cant_res, job_id);
             // CHEQUEAR PORQUE NO RESERVA BIEN CUANDO RECIBE DE OTRO NODO, DEVUELVE SIEMPRE DENIED
-            char nombre_res[32]; int cant_res = 0; int resultado_res = -1;
-            if (sscanf(recursos, "%31[^:]:%d", nombre_res, &cant_res) == 2)
-                resultado_res = gestor_manejar_reserva(estado, nombre_res, job_id, cliente->fd, cant_res);
+            // char nombre_res[32]; int cant_res = 0; int resultado_res = -1;
+            // if (sscanf(recursos, "%31[^:]:%d", nombre_res, &cant_res) == 2)
+            int resultado_res = -1;
+            resultado_res = gestor_manejar_reserva(estado, recurso, job_id, cliente->fd, cant_res);
 
             if (resultado_res == 1) {
                 char rsp[64];
@@ -276,7 +277,7 @@ void procesar_mensaje_red_c(ClienteConectado *cliente, char* msg) {
             // RELEASE a TODOS los nodos (no sabemos cuáles llegaron a GRANTED)
             for (int i = 0; i < n; i++) {
                 char msj[64];
-                snprintf(msj, sizeof(msj), "RELEASE %d %s:%d\n", job_id, recursos_dn[i], cantidades_dn[i]);
+                snprintf(msj, sizeof(msj), "RELEASE %d %s %d\n", job_id, recursos_dn[i], cantidades_dn[i]);
                 enviar_mensaje_tcp(fds[i], msj);
             }
             if (skt_erlang != -1) {
@@ -287,14 +288,14 @@ void procesar_mensaje_red_c(ClienteConectado *cliente, char* msg) {
         }
 
         // CASO 4: Otro agente nos pide que liberemos recursos específicos de un job
-        else if (strcmp(comando, "RELEASE") == 0 && parseados == 3) {
-            char nombre_res[32]; int cant_res = 0;
-            if (sscanf(recursos, "%31[^:]:%d", nombre_res, &cant_res) == 2) {
-                printf("[CONTROLADOR] RELEASE recibido para job %d: %s:%d\n", job_id, nombre_res, cant_res);
-                gestor_manejar_release(estado, nombre_res, job_id, cant_res, callback_granted_red);
-            } else {
-                printf("[CONTROLADOR] RELEASE mal formado: %s\n", msg);
-            }
+        else if (strcmp(comando, "RELEASE") == 0 && parseados == 4) {
+            // char nombre_res[32]; int cant_res = 0;
+            // if (sscanf(recurso, "%31[^:]:%d", nombre_res, &cant_res) == 2) {
+                printf("[CONTROLADOR] RELEASE recibido para job %d: %s %d\n", job_id, recurso, cant_res);
+                gestor_manejar_release(estado, recurso, job_id, cant_res, callback_granted_red);
+            // } else {
+            //     printf("[CONTROLADOR] RELEASE mal formado: %s\n", msg);
+            // }
         }
 
         else {
