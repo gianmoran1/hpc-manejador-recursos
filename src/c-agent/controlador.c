@@ -118,19 +118,21 @@ void procesar_mensaje_erlang(ClienteConectado *cliente, char* msg) {
                     rollback_y_denegar(job_id, cliente->fd, idx);
                     return;
                 }
-
+                Nodo nodo = gestor_buscar_nodo_por_ip(ip_destino, estado);
+                int puerto_destino = nodo->puerto;
                 // Reutilizar conexión existente al nodo; si no hay, abrir una nueva y registrarla.
-                ClienteConectado *cx = nodo_obtener_conexion(ip_destino, PUERTO_TCP,
+                ClienteConectado *cx = nodo_obtener_conexion(ip_destino, puerto_destino,
                                                              estado->registro_nodos);
                 int fd_destino;
                 if (cx != NULL) {
                     fd_destino = cx->fd;
                 } else {
-                    fd_destino = conectar_a_nodo(ip_destino, PUERTO_TCP);
+                    printf("tratando de conectar\n");
+                    fd_destino = conectar_a_nodo(ip_destino, puerto_destino);
                     if (fd_destino != -1) {
                         ClienteConectado *nueva = crear_cliente_conectado(fd_destino, 0);
                         agregar_cliente_en_epoll(nueva, EPOLLIN | EPOLLONESHOT);
-                        nodo_registrar_conexion(ip_destino, PUERTO_TCP, nueva,
+                        nodo_registrar_conexion(ip_destino, puerto_destino, nueva,
                                                 estado->registro_nodos);
                     }
                 }

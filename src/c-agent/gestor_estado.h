@@ -62,4 +62,7 @@ PeticionMulti gestor_buscar_peticion(EstadoGlobal estado, int job_id);
 /* Elimina y libera la peticion con ese job_id. LLAMAR CON estado->lock YA TOMADO. */
 void gestor_eliminar_peticion(EstadoGlobal estado, int job_id);
 
+Nodo gestor_buscar_nodo_por_ip(char* ip, EstadoGlobal estado);
+
+
 #endif /* __GESTOR_ESTADO_H__ */

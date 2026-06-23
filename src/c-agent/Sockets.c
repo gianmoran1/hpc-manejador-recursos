@@ -230,7 +230,7 @@ int atender_cliente_tcp(ClienteConectado *cliente) {
 }
 
 // Devuelve 1 si hay un mensaje listo en 'buffer_destino', o 0 si no hay nada o no nos interesa porque es nuestro mensaje.
-int atender_cliente_udp(int usock_udp, char *buffer_destino, size_t tamaño_maximo) {
+int atender_cliente_udp(int usock_udp, char *buffer_destino, size_t tamano_maximo) {
     char buffer_red[512]; // Un temporal cortito solo para sacar los datos del enchufe
     struct sockaddr_in src_addr;
     socklen_t src_len = sizeof(src_addr);
@@ -249,7 +249,7 @@ int atender_cliente_udp(int usock_udp, char *buffer_destino, size_t tamaño_maxi
     
     // Escribimos el resultado directamente en la variable del llamador
     // Armo el mensaje como ip ANNOUNCE puerto recursos
-    snprintf(buffer_destino, tamaño_maximo, "%s %s", ip_remitente, buffer_red);
+    snprintf(buffer_destino, tamano_maximo, "%s %s", ip_remitente, buffer_red);
 
     return 1; 
 }

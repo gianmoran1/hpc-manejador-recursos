@@ -46,6 +46,9 @@ char* get_nodes(TablaNodos tabla_nodos);
 /*busca un nodo en la tabla, devuelve 1 si lo encuentra, 0 en caso contrario*/
 int buscar_nodo(char* ip, int puerto, TablaNodos tabla_nodos);
 
+/*busca un nodo en la tabla, lo devuelve si esta o NULL si no*/
+Nodo buscar_nodo_por_ip(char* ip, TablaNodos tabla_nodos);
+
 /*procesa un anuncio de un nodo*/
 void procesar_anuncio(TablaNodos tabla_nodos, char* ip, int puerto, int cpu, int gpu, int mem);
 

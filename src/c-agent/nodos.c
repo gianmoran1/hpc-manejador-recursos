@@ -28,8 +28,9 @@ static void no_destruye(__attribute__((unused)) Nodo nodo){
 
 static int nodo_comparar(Nodo a, Nodo b){
     int cmp = strcmp(a->ip, b->ip);
-    if (cmp != 0) return cmp;
-    return a->puerto - b->puerto;
+    return cmp;
+    // if (cmp != 0) return cmp;
+    // return a->puerto - b->puerto;
 }
 
 static unsigned nodo_hash(Nodo a){
@@ -38,7 +39,7 @@ static unsigned nodo_hash(Nodo a){
     for (hashval = 0; *s != '\0'; ++s) {
         hashval = *s + 31 * hashval;
     }
-    return hashval + a->puerto;
+    return hashval; // + a->puerto;
 }
 //-------------------------------------------------------------------------------------------------------------------------------------
 
@@ -219,6 +220,15 @@ int buscar_nodo(char* ip, int puerto, TablaNodos tabla_nodos){
 
     Nodo encontrado = tablahash_buscar(tabla_nodos->tabla, &busqueda);
     return encontrado != NULL;
+}
+
+Nodo buscar_nodo_por_ip(char* ip, TablaNodos tabla_nodos){
+    struct nodo_ busqueda;
+    strncpy(busqueda.ip, ip, (sizeof(busqueda.ip) - 1));
+    busqueda.ip[sizeof(busqueda.ip) - 1] = '\0';
+
+    Nodo encontrado = tablahash_buscar(tabla_nodos->tabla, &busqueda);
+    return encontrado;
 }
 
 /* Helper interno: devuelve el puntero al nodo por ip+puerto, o NULL. */

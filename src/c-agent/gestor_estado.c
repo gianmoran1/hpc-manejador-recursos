@@ -263,3 +263,10 @@ void gestor_desconectar_nodos(EstadoGlobal estado) {
     desconectar(estado->registro_nodos);
     pthread_mutex_unlock(&estado->lock);
 }
+
+Nodo gestor_buscar_nodo_por_ip(char* ip, EstadoGlobal estado){ 
+    pthread_mutex_lock(&estado->lock);
+    Nodo nodoBuscado = buscar_nodo_por_ip(ip, estado->registro_nodos);
+    pthread_mutex_unlock(&estado->lock);
+    return nodoBuscado;
+}
