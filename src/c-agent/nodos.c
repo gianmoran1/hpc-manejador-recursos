@@ -242,12 +242,33 @@ void nodo_registrar_conexion(char* ip, int puerto, ClienteConectado* cliente, Ta
 
 void nodo_limpiar_conexion_por_fd(int fd, TablaNodos tabla_nodos) {
     GList temp = tabla_nodos->lista;
-    while (temp != NULL) {
-        Nodo n = (Nodo)temp->data;
-        if (n->conexion != NULL && n->conexion->fd == fd) {
-            n->conexion = NULL;
+    if (temp == NULL) return; // La lista está vacía
+
+    // el fd esta primero en la lista
+    Nodo n_cabeza = (Nodo)temp->data;
+    if (n_cabeza != NULL && n_cabeza->conexion != NULL && n_cabeza->conexion->fd == fd) {
+        n_cabeza->conexion = NULL;
+        tablahash_eliminar(tabla_nodos->tabla, n_cabeza); // Liberamos la memoria del nodo
+        tabla_nodos->lista = temp->next; // La nueva cabeza es el segundo nodo
+        free(temp); // Liberamos el eslabón de la GList
+        return;
+    }
+
+    // el fd esta en la lista pero no es el primero
+    while (temp->next != NULL) {
+        Nodo n_siguiente = (Nodo)temp->next->data;
+        
+        if (n_siguiente != NULL && n_siguiente->conexion != NULL && n_siguiente->conexion->fd == fd) {
+            n_siguiente->conexion = NULL;
+            tablahash_eliminar(tabla_nodos->tabla, n_siguiente);
+            
+            // Reestructuramos los punteros para puentear el eslabón eliminado
+            GList borrar = temp->next;
+            temp->next = temp->next->next; 
+            free(borrar);
             return;
         }
+        // Avanzamos al siguiente eslabón
         temp = temp->next;
     }
 }
