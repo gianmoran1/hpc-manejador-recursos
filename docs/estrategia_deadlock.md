@@ -10,12 +10,13 @@ el acceso real a los recursos de cada nodo.
 ### Componentes de la estrategia
 
 **Detección (agente C):**  
-El agente C usa `timerfd` para supervisar cada reserva pendiente. Si una reserva no se completa
-dentro del plazo configurado, el agente libera todos los recursos parcialmente adquiridos para
-ese job y notifica al planificador Erlang con `JOB_TIMEOUT <job_id>`.
+El agente C usa `timerfd` (dispara cada 15 s) para supervisar cada reserva pendiente. Si una reserva
+lleva más de 30 s encolada sin resolverse, la descarta y envía `DENIED <job_id>` al agente coordinador
+que originó el `RESERVE`. Ese coordinador ejecuta rollback (envía `RELEASE` a todos sus nodos) y
+notifica al planificador Erlang con `JOB_DENIED <job_id>`.
 
 **Reacción (planificador Erlang):**  
-Al recibir el timeout, el worker del job afectado ejecuta tres pasos:
+Al recibir `JOB_DENIED` (originado por el timeout), el worker del job afectado ejecuta tres pasos:
 
 1. Registra el evento en el log: `[TIMEOUT] JobId:<id>`
 2. Espera una cantidad aleatoria de tiempo entre 1 y 3000 ms (`rand:uniform(3000)`)
@@ -88,8 +89,8 @@ Job 1001: tiene cpu@A, espera gpu@B  ←→  Job 2001: tiene gpu@B, espera cpu@A
 Después del plazo configurado, los `timerfd` de ambos agentes expiran:
 
 ```
-Agente A:  timeout de Job 1001 → libera RESERVE 1001 cpu 2 en Nodo A → JOB_TIMEOUT 1001 → Erlang A
-Agente B:  timeout de Job 2001 → libera RESERVE 2001 gpu 1 en Nodo B → JOB_TIMEOUT 2001 → Erlang B
+Nodo B:  timeout de Job 1001 → DENIED 1001 → Agente A → RELEASE a todos sus nodos → JOB_DENIED 1001 → Erlang A
+Nodo A:  timeout de Job 2001 → DENIED 2001 → Agente B → RELEASE a todos sus nodos → JOB_DENIED 2001 → Erlang B
 ```
 
 Los recursos quedan libres:
@@ -98,78 +99,34 @@ Los recursos quedan libres:
 Nodo A: cpu vuelve a 2   |   Nodo B: gpu vuelve a 1
 ```
 
-### Fase 4 — Reacción Erlang: backoff aleatorio
+### Fase 4 — Reacción Erlang
 
-Los workers de ambos jobs reciben `{timeout, JobId}` del scheduler:
+Los workers de ambos jobs reciben `{denied, JobId}` del scheduler (el scheduler mapea `JOB_DENIED` → `{denied, JobId}`):
 
 ```erlang
 % En jobWorker.erl — ejecutarTrabajoSimulado/4
-{timeout, JobId} ->
-    loggerScheduler:log(io_lib:format("[TIMEOUT] JobId:~w", [JobId])),
-    timer:sleep(rand:uniform(3000)),          % espera aleatoria
-    ejecutarTrabajoSimulado(Socket, JobId, PidScheduler, RecursosTotales)
+{denied, JobId} ->
+    loggerScheduler:log(io_lib:format("[DENIED] JobId:~w", [JobId]));
 ```
 
-Supongamos que el sorteo produce:
+El job finaliza. El scheduler recibe `{jobTerminado, JobId}` y libera el slot en el mapa de jobs activos.
 
-```
-Worker Job 1001:  espera 2314 ms
-Worker Job 2001:  espera  587 ms
-```
-
-### Fase 5 — Reintento desincronizado
-
-Job 2001 despierta primero (587 ms antes) y reintenta:
-
-```
-Erlang B  →  Agente B:  JOB_REQUEST 2001 @192.168.1.11:gpu:1 @192.168.1.10:cpu:2
-
-Agente B  →  Nodo B:    RESERVE 2001 gpu 1   →  GRANTED
-Agente B  →  Nodo A:    RESERVE 2001 cpu 2   →  GRANTED   ← recursos libres, sin espera
-Agente B  →  Erlang B:  JOB_GRANTED 2001
-```
-
-Job 2001 se ejecuta (simula carga), luego libera:
-
-```
-Erlang B  →  Agente B:  JOB_RELEASE 2001
-Nodo A: cpu vuelve a 2   |   Nodo B: gpu vuelve a 1
-```
-
-### Fase 6 — Job 1001 reintenta con recursos disponibles
-
-Job 1001 despierta (1727 ms después de Job 2001):
-
-```
-Erlang A  →  Agente A:  JOB_REQUEST 1001 @192.168.1.10:cpu:2 @192.168.1.11:gpu:1
-
-Agente A  →  Nodo A:    RESERVE 1001 cpu 2   →  GRANTED
-Agente A  →  Nodo B:    RESERVE 1001 gpu 1   →  GRANTED
-Agente A  →  Erlang A:  JOB_GRANTED 1001
-```
-
-Job 1001 se ejecuta y libera. **Deadlock resuelto.**
+> **Nota:** `tcpClient.erl` también parsea `JOB_TIMEOUT` → `{timeout, JobId}`, que activa un handler con backoff aleatorio y reintento. Sin embargo, con la implementación actual del agente C el timeout se encamina como `DENIED` al coordinador y llega a Erlang como `JOB_DENIED`, por lo que el path `{timeout, JobId}` no se activa.
 
 ### Log generado
 
 ```
-[TIMEOUT]  JobId:2001
-[TIMEOUT]  JobId:1001
-[GRANTED]  JobId:2001
-[GRANTED]  JobId:1001
+[DENIED]  JobId:2001
+[DENIED]  JobId:1001
 ```
 
 ---
 
 ## Propiedades de la estrategia
 
-**Liveness:** en cada ciclo de timeout, al menos un job progresa con probabilidad 1 − (1/3000)
-(la probabilidad de que dos backoffs aleatorios en [1, 3000] ms coincidan exactamente).
-En la práctica, con más de dos jobs y ventanas de milisegundos, la probabilidad de colisión
-repetida decae exponencialmente con cada reintento.
+**Liveness:** cuando dos jobs están en deadlock, el timeout los deniega y libera sus recursos. Los slots en el scheduler se liberan y nuevos jobs pueden tomar los recursos disponibles. El backoff aleatorio con reintento (`{timeout, JobId}`) está implementado en Erlang pero requiere que el agente C envíe `JOB_TIMEOUT` directamente; con el flujo actual (`DENIED` → `JOB_DENIED`) los jobs denegados por timeout no se reintentan.
 
-**Safety:** no hay doble asignación porque el agente C libera completamente los recursos
-antes de enviar `JOB_TIMEOUT`. El reintento comienza desde cero sobre recursos limpios.
+**Safety:** no hay doble asignación porque el agente C libera completamente los recursos antes de enviar `DENIED` al coordinador. El coordinador hace rollback de los recursos ya grantados antes de notificar `JOB_DENIED` a Erlang.
 
 **Sin coordinación global:** cada worker actúa de forma totalmente independiente. No hay
 mensajes adicionales entre nodos Erlang ni estado compartido fuera del agente C local.

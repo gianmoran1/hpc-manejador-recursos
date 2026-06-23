@@ -8,7 +8,7 @@ El agente C es un proceso por nodo que cumple tres roles simultáneos:
 2. **Cliente de recursos remoto**: cuando Erlang pide un trabajo que requiere recursos en otro nodo, el agente conecta a ese nodo, le envía `RESERVE` y rastrea la respuesta.
 3. **Puente de protocolo**: traduce entre el protocolo Erlang (`JOB_REQUEST / JOB_RELEASE / GET_NODES`) y el protocolo C-a-C (`RESERVE / GRANTED / DENIED / RELEASE`).
 
-El proceso arranca un epoll con cuatro hilos worker que comparten el mismo descriptor. Cada socket se registra con `EPOLLONESHOT` para que a lo sumo un hilo procese cada evento.
+El proceso arranca un epoll con cuatro hilos worker que comparten el mismo descriptor. Los sockets de escucha se registran con `EPOLLEXCLUSIVE` (para evitar thundering herd) y los clientes conectados con `EPOLLONESHOT` para que a lo sumo un hilo procese cada evento.
 
 ---
 
@@ -45,16 +45,16 @@ tablahash.c / .h          — tabla hash genérica
 
 | Mensaje | Dirección | Descripción |
 |---------|-----------|-------------|
-| `RESERVE <id> <recurso>:<cant>` | A → B | Pide que B reserve `cant` unidades del recurso `recurso` para el job `id` |
+| `RESERVE <id> <recurso> <cant>` | A → B | Pide que B reserve `cant` unidades del recurso `recurso` para el job `id` |
 | `GRANTED <id>` | B → A | Reserva concedida |
 | `DENIED <id>` | B → A | Reserva rechazada (recurso lleno y cola llena, o cantidad inválida) |
-| `RELEASE <id>` | A → B | Cancela / libera la reserva del job `id` en B (rollback o fin de trabajo) |
+| `RELEASE <id> <recurso> <cant>` | A → B | Cancela / libera `cant` unidades del recurso `recurso` del job `id` en B (rollback o fin de trabajo) |
 
 ### UDP broadcast (puerto 12529)
 
 | Mensaje | Descripción |
 |---------|-------------|
-| `ANNOUNCE <IP> <puerto> cpu:<n> mem:<m>` | Autodescubrimiento periódico cada 5 s. Los nodos que no se anuncian en 15 s son eliminados del registro |
+| `ANNOUNCE <puerto> cpu:<n> gpu:<g> mem:<m>` | Autodescubrimiento periódico cada 5 s. La IP del remitente la aporta el propio datagrama UDP. Los nodos que no se anuncian en 15 s son eliminados del registro |
 
 ---
 
@@ -65,7 +65,7 @@ Erlang                Agente A                Agente B (remoto)
   |                      |                         |
   |-- JOB_REQUEST 42 --> |                         |
   |   @IP_B:gpu:1        |                         |
-  |                      |-- RESERVE 42 gpu:1 ---> |
+  |                      |-- RESERVE 42 gpu 1 ----> |
   |                      |                    gestor_manejar_reserva()
   |                      |                    ├ disponible → GRANTED
   |                      |                    └ ocupado   → encolado (espera)
@@ -88,8 +88,8 @@ Si algún nodo responde `DENIED`, Agente A envía `RELEASE` a **todos** los nodo
 Un deadlock puede ocurrir cuando dos agentes se esperan mutuamente para recursos ocupados. La estrategia implementada es **timeout + backoff en Erlang**:
 
 1. Cuando un RESERVE no puede cumplirse de inmediato, la solicitud queda en la cola del recurso con su `instante_llegada`.
-2. El timer de expiración (cada 2 s) llama a `gestor_expirar_pedidos`. Si un pedido supera `TIEMPO_ESPERA` (30 s por defecto), se lo saca de la cola y se dispara el callback que envía `JOB_TIMEOUT <id>` al socket que originó el RESERVE.
-3. El agente que recibe `JOB_TIMEOUT` lo reenvía a Erlang.
+2. El timer de expiración (cada 15 s) llama a `gestor_expirar_pedidos`. Si un pedido supera `TIEMPO_ESPERA` (30 s por defecto), se lo saca de la cola y se dispara el callback que envía `DENIED <id>` al agente coordinador que originó el RESERVE.
+3. El agente coordinador que recibe `DENIED` ejecuta rollback (envía `RELEASE` a todos sus nodos) y notifica `JOB_DENIED <id>` a Erlang.
 4. Erlang aplica backoff aleatorio y reintenta con `JOB_REQUEST`.
 
 ---
@@ -142,7 +142,7 @@ Elimina del registro todos los nodos que no han enviado un ANNOUNCE en los últi
 ### Funciones de peticiones multi-recurso
 
 #### `void gestor_registrar_peticion(EstadoGlobal, PeticionMulti)`
-Inserta la petición al frente de la lista enlazada `peticiones_pendientes`. Toma el lock internamente.
+Inserta la petición en la tabla hash `peticiones_pendientes` (indexada por `job_id`). Toma el lock internamente.
 
 #### `PeticionMulti gestor_buscar_peticion(EstadoGlobal, int job_id)`
 Recorre la lista buscando por `job_id`. **Debe llamarse con `estado->lock` ya tomado.** Retorna `NULL` si no existe.
@@ -165,7 +165,6 @@ typedef struct peticionMulti_ {
     int         total;           // cuántos RESERVE se enviaron
     int         respondidos;     // cuántos respondieron hasta ahora
     NodoReserva nodos[16];       // máx. 16 recursos por job
-    struct peticionMulti_ *sig;
 } *PeticionMulti;
 ```
 
@@ -287,20 +286,19 @@ Parsea y despacha mensajes del socket Erlang local:
 - **`JOB_REQUEST <id> @IP:res:cant [...]`**:
   1. Cuenta los tokens `@IP:...` para conocer el `total`.
   2. Crea y registra una `PeticionMulti`.
-  3. Para cada token: conecta a `IP:PUERTO_TCP`, registra el nodo en `peticion->nodos[]` y envía `RESERVE <id> <res>:<cant>`.
+  3. Para cada token: conecta a `IP:PUERTO_TCP`, registra el nodo en `peticion->nodos[]` y envía `RESERVE <id> <res> <cant>`.
   4. Si la conexión o el parseo fallan en mitad del proceso, llama a `rollback_y_denegar` que envía `RELEASE` a los nodos ya registrados y notifica `JOB_DENIED` a Erlang.
 - **`JOB_RELEASE <id>`**:
-  1. Busca la petición por `job_id`, envía `RELEASE <id>` a todos sus nodos y destruye la petición.
-  2. Llama `gestor_liberar_job` para limpiar recursos locales que eventualmente este agente hubiera reservado para ese job.
+  1. Busca la petición por `job_id`, envía `RELEASE <id> <recurso> <cant>` a cada nodo registrado y destruye la petición.
 
 ### `void procesar_mensaje_red_c(ClienteConectado *cliente, char *msg)`
 
 Parsea y despacha mensajes de otro agente C:
 
-- **`RESERVE <id> <res>:<cant>`**: llama `gestor_manejar_reserva`. Si retorna `1` envía `GRANTED <id>`, si retorna `-1` envía `DENIED <id>`. Si retorna `0` (encolado) no responde de inmediato; `callback_job_granted` notificará cuando haya recursos.
+- **`RESERVE <id> <res> <cant>`**: llama `gestor_manejar_reserva`. Si retorna `1` envía `GRANTED <id>`, si retorna `-1` envía `DENIED <id>`. Si retorna `0` (encolado) no responde de inmediato; `callback_granted_red` notificará cuando haya recursos.
 - **`GRANTED <id>`**: busca la petición por `job_id`, marca el nodo (`fd == cliente->fd`) como `grantado = 1`, incrementa `respondidos`. Si `respondidos == total` envía `JOB_GRANTED <id>` a Erlang (la petición se mantiene viva hasta `JOB_RELEASE`).
-- **`DENIED <id>`**: busca y destruye la petición, envía `RELEASE <id>` a **todos** sus nodos (independientemente de si ya respondieron), y notifica `JOB_DENIED <id>` a Erlang. El `RELEASE` viaja por TCP en orden, por lo que llegará después del `RESERVE` original incluso si hay un `GRANTED` en tránsito.
-- **`RELEASE <id>`**: llama `gestor_liberar_job` para liberar localmente los recursos del job `id`.
+- **`DENIED <id>`**: busca y destruye la petición, envía `RELEASE <id> <recurso> <cant>` a **todos** sus nodos (independientemente de si ya respondieron), y notifica `JOB_DENIED <id>` a Erlang. El `RELEASE` viaja por TCP en orden, por lo que llegará después del `RESERVE` original incluso si hay un `GRANTED` en tránsito.
+- **`RELEASE <id> <recurso> <cant>`**: llama `gestor_manejar_release` para liberar localmente `cant` unidades del `recurso` del job `id`.
 
 ---
 
