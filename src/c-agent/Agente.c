@@ -93,7 +93,7 @@ void modificar_cliente_en_epoll (ClienteConectado *cliente, int flags) {
 
 void aceptar_cliente(int fd_listo) {
     
-    // Hay un nuevo cliente queriendo entrar. ¡Vamos a abrirle la puerta!
+    // Hay un nuevo cliente queriendo entrar.
     struct sockaddr_in cliente_addr;
     socklen_t cliente_len = sizeof(cliente_addr);
     
