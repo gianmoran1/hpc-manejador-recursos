@@ -63,13 +63,13 @@ int main(void) {
     /* ── Paso 1: Job 9000 satura gpu:1 ── */
     printf("--- Paso 1: Job 9000 satura gpu:1 ---\n");
     int r = gestor_manejar_reserva(estado, "gpu", 9000, 20, 1);
-    assert_true(r == 1,                        "RESERVE 9000 gpu:1 -> GRANTED");
+    assert_true(r == 1,                        "RESERVE 9000 gpu 1 -> GRANTED");
     assert_true(estado->gpu->disponible == 0,  "GPU disponible = 0 tras la reserva");
 
     /* ── Paso 2: Job 1001 pide gpu:1 con GPU ocupada → debe quedar encolado ── */
     printf("\n--- Paso 2: Job 1001 pide gpu:1 (GPU llena) ---\n");
     r = gestor_manejar_reserva(estado, "gpu", 1001, 10, 1);
-    assert_true(r == 0,                                    "RESERVE 1001 gpu:1 -> encolado");
+    assert_true(r == 0,                                    "RESERVE 1001 gpu 1 -> encolado");
     assert_true(!cola_es_vacia(estado->gpu->pendientes),   "Cola GPU no vacía");
 
     /* ── Paso 3: forzar expiración poniendo el timestamp al epoch ── */
@@ -115,13 +115,13 @@ int main(void) {
     /* ── Paso 1: Job 500 reserva cpu:2 en Nodo A → GRANTED ── */
     printf("\n--- Paso 1: Job 500 reserva cpu:2 en Nodo A ---\n");
     int r500 = gestor_manejar_reserva(nodo_a, "cpu", 500, 30, 2);
-    assert_true(r500 == 1,                    "RESERVE 500 cpu:2 en Nodo A -> GRANTED");
+    assert_true(r500 == 1,                    "RESERVE 500 cpu 2 en Nodo A -> GRANTED");
     assert_true(nodo_a->cpu->disponible == 2, "Nodo A: cpu disponible = 2");
 
     /* ── Paso 2: Job 500 pide gpu:1 en Nodo B → encolado (Nodo B lleno) ── */
     printf("\n--- Paso 2: Job 500 pide gpu:1 en Nodo B (GPU llena) ---\n");
     int r500b = gestor_manejar_reserva(nodo_b, "gpu", 500, 30, 1);
-    assert_true(r500b == 0, "RESERVE 500 gpu:1 en Nodo B -> encolado");
+    assert_true(r500b == 0, "RESERVE 500 gpu 1 en Nodo B -> encolado");
 
     /* ── Paso 3: Nodo B envía DENIED (simulado por timeout/expiración inmediata)
      *           → el agente hace rollback liberando todo lo grantado en Nodo A ── */
