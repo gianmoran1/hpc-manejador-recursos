@@ -1,9 +1,8 @@
 #ifndef __RECURSOS_H__
 #define __RECURSOS_H__
 
-#include "cola.h"
+#include "./estructuras/cola.h"
 #include <time.h>
-
 
 typedef struct solicitudPendiente_{
     int job_id;
@@ -13,16 +12,16 @@ typedef struct solicitudPendiente_{
 } *SolicitudPendiente;
 
 typedef struct recursoLocal_{
-    char nombre[10];       
-    int capacidad_total;   
-    int disponible;        
-    Cola pendientes;       
+    char nombre[10];
+    int capacidad_total;
+    int disponible;
+    Cola pendientes;
 } *RecursoLocal;
 
-/*crea un recurso local */
+/* Crea un recurso local */
 RecursoLocal recurso_crear(char* nombre, int capacidad);
 
-/*destruye un recurso local */
+/* Destruye un recurso local */
 void recurso_destruir(RecursoLocal rec);
 
 #endif /* __RECURSOS_H__ */

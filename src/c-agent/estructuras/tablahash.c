@@ -2,8 +2,6 @@
 #include <assert.h>
 #include <stdlib.h>
 
-
-
 /**
  * Casillas en la que almacenaremos los datos de la tabla hash.
  */
@@ -19,17 +17,16 @@ struct _TablaHash {
   CasillaHash *elems;
   unsigned numElems;
   unsigned capacidad;
-  FuncionCopiadora copia;
+  FuncionCopia copia;
   FuncionComparadora comp;
   FuncionDestructora destr;
   FuncionHash hash;
 };
 
-
 /**
  * Crea una nueva tabla hash vacia, con la capacidad dada.
  */
-TablaHash tablahash_crear(unsigned capacidad, FuncionCopiadora copia,
+TablaHash tablahash_crear(unsigned capacidad, FuncionCopia copia,
                           FuncionComparadora comp, FuncionDestructora destr,
                           FuncionHash hash) {
 
@@ -87,33 +84,33 @@ static void* no_copia(void* dato){
 static void tablahash_redimensionar(TablaHash tabla){
   CasillaHash* viejoArr = tabla->elems;
   unsigned viejaCap = tabla->capacidad;
-  FuncionCopiadora copia = tabla->copia;
-  tabla->capacidad *=2; //duplico la capacidad
+  FuncionCopia copia = tabla->copia;
+  tabla->capacidad *=2; // Duplico la capacidad
   tabla->elems = malloc(sizeof(CasillaHash)*tabla->capacidad);
   assert(tabla->elems != NULL);
 
-  //inicializo los datos:
+  // Inicializo los datos:
   for (unsigned idx = 0; idx < tabla->capacidad; ++idx) {
     tabla->elems[idx].dato = NULL;
     tabla->elems[idx].eliminado = 0;
   }
 
-  //cambio la funcion copia:
+  // Cambio la funcion copia:
   tabla->copia = no_copia;
 
-  //reinicio el contador de elementos:
+  // Reinicio el contador de elementos:
   tabla->numElems = 0;
 
-  //vuelvo a cargar los elentos:
+  // Vuelvo a cargar los elentos:
   for (unsigned idx = 0; idx < viejaCap; ++idx){
     if (viejoArr[idx].dato != NULL)
       tablahash_insertar(tabla, viejoArr[idx].dato);
   }
 
-  //restauro la copia:
+  // Restauro la copia:
   tabla->copia = copia;
 
-  //libero el viejo array:
+  // Libero el viejo array:
   free(viejoArr);
 } 
 
@@ -129,11 +126,11 @@ void tablahash_insertar(TablaHash tabla, void *dato) {
 
   for(unsigned i=0; i< tabla->capacidad && !insertado; i++){
 
-    if(tabla->elems[idx].dato == NULL){ //eliminado o casilla virgen
-      if (lugar == -1) //la primera "vacia" que encontre
+    if(tabla->elems[idx].dato == NULL){ // Eliminado o casilla virgen
+      if (lugar == -1) // La primera "vacia" que encontre
         lugar = idx;
       if (tabla->elems[idx].eliminado == 0){
-        insertado = 1; //termine de recorrer el cluster
+        insertado = 1; // Termine de recorrer el cluster
       }
     }
 
@@ -144,7 +141,7 @@ void tablahash_insertar(TablaHash tabla, void *dato) {
       insertado = 1;
       lugar = -1;
     }
-    idx = (idx +1) % tabla->capacidad; //itero
+    idx = (idx +1) % tabla->capacidad;
   } 
 
   if (lugar >= 0){
@@ -157,7 +154,6 @@ void tablahash_insertar(TablaHash tabla, void *dato) {
     tablahash_redimensionar(tabla);
   return;
 }
-
 
 /**
  * Retorna el dato de la tabla que coincida con el dato dado, o NULL si el dato
@@ -174,10 +170,8 @@ void *tablahash_buscar(TablaHash tabla, void *dato) {
     if (tabla->elems[idx].dato == NULL && tabla->elems[idx].eliminado == 0)
         return NULL;
 
-    if (tabla->elems[idx].dato != NULL &&  tabla->comp(tabla->elems[idx].dato, dato) == 0)
+    if (tabla->elems[idx].dato != NULL && tabla->comp(tabla->elems[idx].dato, dato) == 0)
       return tabla->elems[idx].dato;
-
-    //rompo el for pero no me importa.
 
     idx = (idx+1) % tabla->capacidad;
   }
@@ -202,7 +196,7 @@ void tablahash_eliminar(TablaHash tabla, void *dato) {
       eliminado = 1;
       tabla->numElems--;
       tabla->destr(tabla->elems[idx].dato);
-      tabla->elems[idx].dato = NULL; //fundamental
+      tabla->elems[idx].dato = NULL;
       CasillaHash siguiente = tabla->elems[(idx +1) % tabla->capacidad];
       if (siguiente.dato == NULL && siguiente.eliminado == 0)
         tabla->elems[idx].eliminado = 0;
@@ -212,4 +206,3 @@ void tablahash_eliminar(TablaHash tabla, void *dato) {
     idx = (idx +1) % tabla->capacidad;
   }
 }
-

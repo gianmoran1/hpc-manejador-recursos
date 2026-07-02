@@ -7,7 +7,7 @@
 #include "jobs.h"
 #include "nodos.h"
 #include "transacciones.h"
-#include "tablahash.h"
+#include "./estructuras/tablahash.h"
 #include <pthread.h>
 
 typedef struct estadoGlobal_ {

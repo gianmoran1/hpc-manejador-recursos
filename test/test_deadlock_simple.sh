@@ -220,7 +220,7 @@ int main(void) {
 }
 CTEST
 
-SRCS="gestor_estado.c recursos.c jobs.c nodos.c tablahash.c glist.c cola.c transacciones.c"
+SRCS="gestor_estado.c recursos.c jobs.c nodos.c transacciones.c estructuras/tablahash.c estructuras/glist.c estructuras/cola.c"
 gcc -g -I"$SRC" "$BUILD/test_deadlock.c" \
     $(for f in $SRCS; do echo "$SRC/$f"; done) \
     -lpthread -o "$BUILD/test_deadlock" 2>"$BUILD/err.log" \

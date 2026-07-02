@@ -1,15 +1,14 @@
 #ifndef __GLIST_H__
 #define __GLIST_H__
 
-typedef void (*FuncionDestructora)(void *dato);//puntero a funcion, no retorna
-typedef void *(*FuncionCopia)(void *dato); //puntero a funcion que retorna void* (puntero)
+#include "utils.h"
+
 typedef void (*FuncionVisitante)(void *dato);
-typedef int (*Predicado) (void *dato); //puntero a funcion, retorna int
-typedef int (*FuncionComparadora)(void *dato1, void *dato2);
+typedef int (*Predicado)(void *dato);
 
 typedef struct _GNode {
-  void *data; //void puntero
-  struct _GNode *next; //puntero a gnode 
+  void *data;
+  struct _GNode *next;
 } GNode;
 
 typedef GNode *GList;

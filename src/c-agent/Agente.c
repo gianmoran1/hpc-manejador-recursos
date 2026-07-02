@@ -10,11 +10,11 @@
 #include <sys/select.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
-#include <fcntl.h> /* For O_* constants */
-#include <sys/stat.h> /* For mode constants */
-#include <sys/mman.h> /* mmap */
-#include <sys/wait.h> /* wait */
-#include <unistd.h> /* ftruncate */
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
+#include <sys/wait.h> 
+#include <unistd.h>
 #include <pthread.h>
 #include <sys/epoll.h>
 #include <signal.h>
@@ -34,9 +34,6 @@
  * Simulando un ANNOUNCE por echo "ANNOUNCE 10.0.0.5 4040 gpu:1" | nc -u -w1 127.0.0.1 12529
   */
 
-
-
-
 #define CAP_CPU 4
 #define CAP_GPU 1
 #define CAP_MEM 8192
@@ -51,8 +48,6 @@ int timer_timeout;
 char mi_ip_publica[16];
 EstadoGlobal estado = NULL;
 // EL ESTADO ES NULL CUANDO LLEGA UN MENSAJE TCP? 
-
-
 
 void agregar_fd_en_epoll(int fd, int flags) {
     struct epoll_event ev;
@@ -284,14 +279,10 @@ void* bucle_principal(void* args) {
     return NULL;
 }
 
-
-
 int main() {
-
-    signal(SIGPIPE, SIG_IGN);
-
+    signal(SIGPIPE, SIG_IGN); // La senial SIGPIPE por default mata el proceso 
+                             // cuando se intenta escribir en un socket cerrado. 
     estado = estado_crear(CAP_CPU, CAP_GPU, CAP_MEM);
-
     obtener_mi_ip_local(mi_ip_publica);
 
     // Registrarse en la propia tabla de nodos para que Erlang se vea a sí mismo en GET_NODES
@@ -302,9 +293,9 @@ int main() {
     // Creo el epoll
     epoll_fd = epoll_create1(0);
     if (epoll_fd == -1) {
-	    quit("epoll_create1");
-		exit(EXIT_FAILURE);
-	}
+    quit("epoll_create1");
+    exit(EXIT_FAILURE);
+    }
 
     // Creo los tres sockets de escucha
     lsock_publico = mk_tcp_lsock(PUERTO_TCP, mi_ip_publica); 
@@ -312,63 +303,27 @@ int main() {
     usock_udp     = mk_udp_lsock(PUERTO_UDP);
     timer_anuncios_fd = mk_timer(5); // Creamos el timer cada 5 segundos
     timer_timeout = mk_timer(15);
-    
+
     // Registro los sockets de entrada y el timer en el epoll
     agregar_cliente_en_epoll(crear_cliente_conectado(lsock_publico, 0), EPOLLIN | EPOLLEXCLUSIVE);
     agregar_cliente_en_epoll(crear_cliente_conectado(lsock_local, 0), EPOLLIN | EPOLLEXCLUSIVE);
     agregar_cliente_en_epoll(crear_cliente_conectado(usock_udp, 0), EPOLLIN | EPOLLEXCLUSIVE);
     agregar_cliente_en_epoll(crear_cliente_conectado(timer_anuncios_fd, 0), EPOLLIN | EPOLLEXCLUSIVE);
     agregar_cliente_en_epoll(crear_cliente_conectado(timer_timeout,0), EPOLLIN | EPOLLEXCLUSIVE);
-    
+
 
     printf("Servidor HPC iniciado. Escuchando en puerto %d...\n", PUERTO_TCP);
 
     // // Inicio los 4 hilos trabajadores
     pthread_t hilos[4];
     for (int i = 0; i < 4; i++) {
-        pthread_create(&hilos[i], NULL, bucle_principal, NULL);
+    pthread_create(&hilos[i], NULL, bucle_principal, NULL);
     }
 
     // Espero a que terminen (bucle infinito)
     for (int i = 0; i < 4; i++) {
-        pthread_join(hilos[i], NULL);
+    pthread_join(hilos[i], NULL);
     }
 
     return 0;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

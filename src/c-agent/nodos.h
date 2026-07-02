@@ -1,8 +1,8 @@
 #ifndef __NODOS_H__
 #define __NODOS_H__
 
-#include "tablahash.h"
-#include "glist.h"
+#include "./estructuras/tablahash.h"
+#include "./estructuras/glist.h"
 #include "cliente.h"
 #include <time.h>
 

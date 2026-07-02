@@ -4,7 +4,6 @@
 #include <stdio.h>
 #include <time.h>
 
-
 #define TIEMPO_ESPERA 30.0
 
 // funciones auxiliares para la Cola

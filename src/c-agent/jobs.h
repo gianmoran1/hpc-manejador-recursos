@@ -1,8 +1,8 @@
 #ifndef __JOBS_H__
 #define __JOBS_H__
 
-#include "tablahash.h"
-#include "glist.h"
+#include "./estructuras/tablahash.h"
+#include "./estructuras/glist.h"
 
 // La estructura de la deuda de un trabajo
 typedef struct jobActivo_ {

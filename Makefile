@@ -9,7 +9,7 @@ ERL_DIR  = src/erlang-scheduler
 ERL_SRCS = loggerScheduler.erl tcpClient.erl manejoRecursos.erl \
            jobWorker.erl scheduler.erl main.erl
 
-SRCS = $(wildcard $(SRC_DIR)/*.c)
+SRCS = $(shell find $(SRC_DIR) -name '*.c')
 OBJS = $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.o, $(SRCS))
 
 .PHONY: all erlang run valgrind test clean
@@ -21,6 +21,7 @@ $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $^
 
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -I$(SRC_DIR) -c $< -o $@
 
 $(BUILD_DIR):
@@ -46,6 +47,6 @@ test:
 
 # ── Limpieza ───────────────────────────────────────────────────────────────────
 clean:
-	rm -f $(BUILD_DIR)/*.o
+	rm -rf $(BUILD_DIR)
 	rm -f $(TARGET)
 	rm -f $(ERL_DIR)/*.beam

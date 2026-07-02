@@ -45,7 +45,7 @@ static unsigned nodo_hash(Nodo a){
 
 TablaNodos crear_tabla_nodos(){
     TablaNodos tabla_nodos = malloc(sizeof(struct tabla_nodos));
-    TablaHash tablahash = tablahash_crear(100, (FuncionCopiadora)nodo_copiar, 
+    TablaHash tablahash = tablahash_crear(100, (FuncionCopia)nodo_copiar, 
                                 (FuncionComparadora) nodo_comparar, 
                                 (FuncionDestructora) nodo_destruir,
                                 (FuncionHash) nodo_hash);
@@ -80,7 +80,7 @@ Nodo crear_nodo(char* ip, int puerto, int cpu, int gpu, int mem){
 void agregar_nodo(Nodo nodo, TablaNodos tabla_nodos){ 
     //insertamos tanto a tabla como a lista
     tablahash_insertar(tabla_nodos->tabla, nodo);
-    tabla_nodos->lista = glist_agregar_inicio(tabla_nodos->lista, nodo, (FuncionCopiadora)nodo_copiar);
+    tabla_nodos->lista = glist_agregar_inicio(tabla_nodos->lista, nodo, (FuncionCopia)nodo_copiar);
 }
 
 

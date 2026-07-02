@@ -16,7 +16,7 @@ RecursoLocal recurso_crear(char* nombre, int capacidad) {
     return rec;
 }
 
-void recurso_destruir(RecursoLocal rec){
+void recurso_destruir(RecursoLocal rec) {
     cola_destruir(rec->pendientes, (FuncionDestructora)destruir_solicitud);
     free(rec);
 }

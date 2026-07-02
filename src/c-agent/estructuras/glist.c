@@ -7,7 +7,9 @@
 /**
  * Devuelve una lista vacía.
  */
-GList glist_crear() { return NULL; }
+GList glist_crear() {
+  return NULL;
+}
 
 /**
  * Destruccion de la lista.
@@ -18,7 +20,7 @@ void glist_destruir(GList list, FuncionDestructora destroy) {
   while (list != NULL) {
     nodeToDelete = list;
     list = list->next;
-    destroy(nodeToDelete->data); //el unico sentido que le veo es que tenga que hacer un free en .data porque guarda un array
+    destroy(nodeToDelete->data);
     free(nodeToDelete);
   }
 }
