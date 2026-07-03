@@ -3,10 +3,10 @@
 
 /*INTERFAZ PRINCIPAL DEL GESTOR DE ESTADO, PARA USAR EN EL LOOP DE EPOLL*/
 
-#include "recursos.h"
-#include "jobs.h"
-#include "nodos.h"
-#include "transacciones.h"
+#include "./modelo/recursos.h"
+#include "./modelo/jobs.h"
+#include "./modelo/nodos.h"
+#include "./modelo/transacciones.h"
 #include "./estructuras/tablahash.h"
 #include <pthread.h>
 

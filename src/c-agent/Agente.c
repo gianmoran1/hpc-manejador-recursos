@@ -281,7 +281,7 @@ void* bucle_principal(void* args) {
 
 int main() {
     signal(SIGPIPE, SIG_IGN); // La senial SIGPIPE por default mata el proceso 
-                             // cuando se intenta escribir en un socket cerrado. 
+                              // cuando se intenta escribir en un socket cerrado. 
     estado = estado_crear(CAP_CPU, CAP_GPU, CAP_MEM);
     obtener_mi_ip_local(mi_ip_publica);
 

@@ -1,7 +1,7 @@
 #ifndef __RECURSOS_H__
 #define __RECURSOS_H__
 
-#include "./estructuras/cola.h"
+#include "../estructuras/cola.h"
 #include <time.h>
 
 typedef struct solicitudPendiente_{

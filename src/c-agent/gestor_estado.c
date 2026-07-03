@@ -35,7 +35,8 @@ EstadoGlobal estado_crear(int cap_cpu, int cap_gpu, int cap_mem) {
     e->mem = recurso_crear("mem", cap_mem);
     e->libro_contable = crear_tabla_jobs();
     e->registro_nodos = crear_tabla_nodos();
-    e->peticiones_pendientes = tablahash_crear(100, no_copia_peticion, peticion_comparar, (FuncionDestructora)free, peticion_hash);
+    e->peticiones_pendientes = tablahash_crear(100, no_copia_peticion, 
+        peticion_comparar, (FuncionDestructora)free, peticion_hash);
     pthread_mutex_init(&e->lock, NULL);
     return e;
 }

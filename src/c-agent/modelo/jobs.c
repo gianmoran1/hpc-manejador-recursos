@@ -3,9 +3,6 @@
 #include <string.h>
 #include <stdio.h>
 
-
-/*funciones auxiliares para la tabla de trabajos*/
-
 static void* job_no_copia(void* dato) {
     return dato;
 }
@@ -22,15 +19,18 @@ static unsigned job_hash(void* dato) {
     return (unsigned)((JobActivo)dato)->job_id;
 }
 
+// No-op: la lista y la tabla hash comparten los mismos punteros JobActivo
+// (se insertan con job_no_copia en ambas). El dueño real de esa memoria es
+// la tabla hash (destruir_tabla_jobs la libera primero); este destructor
+// para la lista solo debe liberar los nodos de la lista (GList), nunca el
+// JobActivo, o se pincha un double free.
 static void no_destruye_job(__attribute__((unused)) void* dato) {
-    // Para la limpieza de la lista sin romper el hash
 }
-
-// -----------------------------------------------------------------
 
 TablaJobs crear_tabla_jobs() {
     TablaJobs tj = malloc(sizeof(struct tablaJobs_));
-    tj->tabla = tablahash_crear(100, job_no_copia, job_comparar, job_destruir, job_hash);
+    tj->tabla = tablahash_crear(100, job_no_copia, job_comparar, job_destruir, 
+        job_hash);
     tj->lista = glist_crear();
     return tj;
 }
@@ -41,7 +41,8 @@ void destruir_tabla_jobs(TablaJobs tabla_jobs) {
     free(tabla_jobs);
 }
 
-void registrar_asignacion(TablaJobs tabla_jobs, int job_id, int socket, char* recurso, int cantidad) {
+void registrar_asignacion(TablaJobs tabla_jobs, int job_id, int socket, 
+                            char* recurso, int cantidad) {
     struct jobActivo_ busqueda;
     busqueda.job_id = job_id;
 
@@ -58,17 +59,18 @@ void registrar_asignacion(TablaJobs tabla_jobs, int job_id, int socket, char* re
         job->mem_usada = 0;
 
         tablahash_insertar(tabla_jobs->tabla, job);
-        tabla_jobs->lista = glist_agregar_inicio(tabla_jobs->lista, job, job_no_copia);
+        tabla_jobs->lista = glist_agregar_inicio(tabla_jobs->lista, job, 
+                                                job_no_copia);
     }
 
-    // asignamos los recursos
+    // Asignamos los recursos
     if (strcmp(recurso, "cpu") == 0) job->cpu_usada += cantidad;
     else if (strcmp(recurso, "gpu") == 0) job->gpu_usada += cantidad;
     else if (strcmp(recurso, "mem") == 0) job->mem_usada += cantidad;
 }
 
-
-int registrar_liberacion(TablaJobs tabla_jobs, int job_id, char* recurso, int cantidad) {
+int registrar_liberacion(TablaJobs tabla_jobs, int job_id, char* recurso, 
+                        int cantidad) {
     struct jobActivo_ busqueda;
     busqueda.job_id = job_id;
 
@@ -91,7 +93,10 @@ int registrar_liberacion(TablaJobs tabla_jobs, int job_id, char* recurso, int ca
 
     // Si el trabajo ya no consume recursos lo eliminamos.
     if (job->cpu_usada == 0 && job->gpu_usada == 0 && job->mem_usada == 0) {
-        /*eliminamos primero el puntero de la lista, luego destruimos el job de la tabla*/
+        // Primero desenlazamos el nodo de la lista (solo libera el GNode,
+        // no el JobActivo) y recién después tablahash_eliminar libera el
+        // JobActivo. Si se invierte el orden, el puntero job de la lista
+        // queda colgando antes de poder compararlo.
         GList temp = tabla_jobs->lista;
         if (temp != NULL) {
             if (temp->data == job) {
@@ -113,20 +118,16 @@ int registrar_liberacion(TablaJobs tabla_jobs, int job_id, char* recurso, int ca
     return liberado;
 }
 
-
-
-void liberar_recursos_socket(TablaJobs tabla_jobs, int socket_caido, void (*liberar_recurso_cb)(char*, int)) {
+void liberar_recursos_socket(TablaJobs tabla_jobs, int socket_caido, 
+                                void (*liberar_recurso_cb)(char*, int)) {
     GList temp = tabla_jobs->lista;
     if (temp == NULL) return;
 
-    
     int total_cpu_liberada = 0;
     int total_gpu_liberada = 0;
     int total_mem_liberada = 0;
 
-
-    
-    // 1. Liberamos los trabajos que pertenezcan al socket caido
+    // Liberamos los trabajos que pertenezcan al socket caido
     while (temp != NULL) {
         JobActivo job = (JobActivo)temp->data;
         if (job->socket_origen == socket_caido) {
@@ -145,19 +146,19 @@ void liberar_recursos_socket(TablaJobs tabla_jobs, int socket_caido, void (*libe
         }
     }
 
-    // 2. Limpiamos el resto de la lista (solo si quedaron elementos)
+    // Limpiamos el resto de la lista (solo si quedaron elementos)
     if (temp != NULL) {
         while (temp->next != NULL) {
             JobActivo job = (JobActivo)temp->next->data;
             if (job->socket_origen == socket_caido) {
                 GList next = temp->next->next;
 
-                // Acumulamos el oro
                 total_cpu_liberada += job->cpu_usada;
                 total_gpu_liberada += job->gpu_usada;
                 total_mem_liberada += job->mem_usada;
 
-                tablahash_eliminar(tabla_jobs->tabla, job); //tambien la eliminamos de la tabla.
+                // Tambien la eliminamos de la tabla.
+                tablahash_eliminar(tabla_jobs->tabla, job);
                 free(temp->next);
                 temp->next = next;
             } else {
@@ -166,9 +167,7 @@ void liberar_recursos_socket(TablaJobs tabla_jobs, int socket_caido, void (*libe
         }
     }
 
-
-
-    // disparamos los callbacks con el total acumulado.
+    // Disparamos los callbacks con el total acumulado.
     if (total_cpu_liberada > 0) liberar_recurso_cb("cpu", total_cpu_liberada);
     if (total_gpu_liberada > 0) liberar_recurso_cb("gpu", total_gpu_liberada);
     if (total_mem_liberada > 0) liberar_recurso_cb("mem", total_mem_liberada);

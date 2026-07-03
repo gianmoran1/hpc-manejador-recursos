@@ -6,7 +6,7 @@
 #include "Agente.h"        // Para el epoll global y erlangSocket
 #include "Sockets.h"       // Para enviar_mensaje_tcp y conectar_a_nodo
 #include "gestor_estado.h" // implementacion del gestor de recursos
-#include "transacciones.h" // PeticionMulti para rollback de JOB_REQUEST
+#include "./modelo/transacciones.h" // PeticionMulti para rollback de JOB_REQUEST
 
 // Estado global definido en Agente.c
 extern EstadoGlobal estado;

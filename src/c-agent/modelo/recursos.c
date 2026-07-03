@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static void destruir_solicitud(void* dato){
+static void destruir_solicitud(void* dato) {
     free(dato);
 }
 
