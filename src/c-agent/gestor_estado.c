@@ -1,25 +1,27 @@
 #include "gestor_estado.h"
+#include "config.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
 
-#define TIEMPO_ESPERA 30.0
+// Callbacks para la Cola de pendientes de cada RecursoLocal
 
-// funciones auxiliares para la Cola
 static void* no_copia_solicitud(void* dato) { return dato; }
 static void destruir_solicitud(void* dato) { free(dato); }
 
-// funciones auxiliares para la TablaHash de peticiones multi-recurso
+// Callbacks para la TablaHash de peticiones multi-recurso
+
 static void* no_copia_peticion(void* dato) { return dato; }
+
 static int peticion_comparar(void* dato1, void* dato2) {
     return ((PeticionMulti)dato1)->job_id - ((PeticionMulti)dato2)->job_id;
 }
+
+/* Hash de una petición: su propio job_id. */
 static unsigned peticion_hash(void* dato) {
     return (unsigned)((PeticionMulti)dato)->job_id;
 }
-
-//---------------------------------------------------------------------------
 
 static RecursoLocal obtener_recurso(EstadoGlobal estado, char* nombre) {
     if (strcmp(nombre, "cpu") == 0) return estado->cpu;
@@ -35,7 +37,7 @@ EstadoGlobal estado_crear(int cap_cpu, int cap_gpu, int cap_mem) {
     e->mem = recurso_crear("mem", cap_mem);
     e->libro_contable = crear_tabla_jobs();
     e->registro_nodos = crear_tabla_nodos();
-    e->peticiones_pendientes = tablahash_crear(100, no_copia_peticion, 
+    e->peticiones_pendientes = tablahash_crear(100, no_copia_peticion,
         peticion_comparar, (FuncionDestructora)free, peticion_hash);
     pthread_mutex_init(&e->lock, NULL);
     return e;
@@ -52,8 +54,18 @@ void estado_destruir(EstadoGlobal estado) {
     free(estado);
 }
 
+void gestor_recursos_disponibles(EstadoGlobal estado, int *cpu, int *gpu, int *mem) {
+    pthread_mutex_lock(&estado->lock);
+    *cpu = estado->cpu->disponible;
+    *gpu = estado->gpu->disponible;
+    *mem = estado->mem->disponible;
+    pthread_mutex_unlock(&estado->lock);
+}
 
-int gestor_manejar_reserva(EstadoGlobal estado, char* nombre_recurso, int job_id, int socket_origen, int cantidad) {
+//------------------------------------------------------------------------------
+
+int gestor_manejar_reserva(EstadoGlobal estado, char* nombre_recurso, int job_id, 
+                            int socket_origen, int cantidad) {
     pthread_mutex_lock(&estado->lock);
 
     int resultado = -1; // DENIED por defecto
@@ -161,7 +173,7 @@ void gestor_expirar_pedidos(EstadoGlobal estado, void (*avisar_timeout)(int, int
             SolicitudPendiente solicitud = (SolicitudPendiente)cola_inicio(rec->pendientes, no_copia_solicitud);
             if (!solicitud) break;
 
-            if (difftime(ahora, solicitud->instante_llegada) >= TIEMPO_ESPERA) {
+            if (difftime(ahora, solicitud->instante_llegada) >= TIEMPO_ESPERA_RESERVA) {
                 printf("[TIMEOUT] El job_id %d caducó en recurso %s.\n", solicitud->job_id, rec->nombre);
                 if (avisar_timeout) avisar_timeout(solicitud->job_id, solicitud->socket_origen);
                 rec->pendientes = cola_desencolar(rec->pendientes, destruir_solicitud);
@@ -241,7 +253,8 @@ void gestor_eliminar_peticion(EstadoGlobal estado, int job_id) {
 // OPERACIONES DEL RADAR DE NODOS (Protocolo Erlang / UDP)
 // -----------------------------------------------------------------------------
 
-void gestor_procesar_anuncio(EstadoGlobal estado, char* ip, int puerto, int cpu, int gpu, int mem) {
+void gestor_procesar_anuncio(EstadoGlobal estado, char* ip, int puerto, int cpu, 
+                            int gpu, int mem) {
     pthread_mutex_lock(&estado->lock);
     procesar_anuncio(estado->registro_nodos, ip, puerto, cpu, gpu, mem);
     pthread_mutex_unlock(&estado->lock);

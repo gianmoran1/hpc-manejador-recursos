@@ -1,15 +1,15 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdint.h>
+#include <unistd.h>
 #include <pthread.h>
+#include "config.h"
 #include "controlador.h"
-#include "Agente.h"        // Para el epoll global y erlangSocket
-#include "Sockets.h"       // Para enviar_mensaje_tcp y conectar_a_nodo
+#include "servidor.h"      // globals del servidor: estado, usock_udp, timers
+#include "red/sockets.h"   // enviar/atender_* y conectar_a_nodo
 #include "gestor_estado.h" // implementacion del gestor de recursos
-#include "./modelo/transacciones.h" // PeticionMulti para rollback de JOB_REQUEST
-
-// Estado global definido en Agente.c
-extern EstadoGlobal estado;
+#include "modelo/transacciones.h" // PeticionMulti para rollback de JOB_REQUEST
 
 // Callback C-C: notifica a un nodo coordinador que su RESERVE encolado fue concedido.
 // Usa "GRANTED" (protocolo C-C), no "JOB_GRANTED" (que es solo para Erlang).
@@ -304,5 +304,73 @@ void procesar_mensaje_red_c(ClienteConectado *cliente, char* msg) {
             printf("[CONTROLADOR] Comando de red C ignorado o mal formado: %s\n", msg);
         }
     }
+}
+
+// =========================================================================
+// HANDLERS DEL LOOP DE EVENTOS (invocados desde bucle_principal en servidor.c)
+// =========================================================================
+
+// Callback de timeout: cuando un RESERVE lleva más de TIEMPO_ESPERA_RESERVA
+// encolado sin resolverse, avisamos DENIED al coordinador que lo originó para
+// que haga rollback y notifique JOB_DENIED a Erlang.
+static void notificar_denied_timeout(int job_id, int socket_fd) {
+    char msj[64];
+    snprintf(msj, sizeof(msj), "DENIED %d\n", job_id);
+    enviar_mensaje_tcp(socket_fd, msj);
+}
+
+int parseo_anuncio(void) {
+    char buffer_udp[1024];
+    int valido = atender_cliente_udp(usock_udp, buffer_udp, sizeof(buffer_udp));
+    if (!valido) return 0;
+
+    printf("¡ANNOUNCE UDP recibido: %s!\n", buffer_udp);
+    char ip_node[50], cmd[32];
+    int puerto_node = 0, cpu = 0, gpu = 0, mem = 0;
+    int n = sscanf(buffer_udp, "%49s %31s %d", ip_node, cmd, &puerto_node);
+    if (n == 3 && strcmp(cmd, "ANNOUNCE") == 0) {
+        // Avanzar el cursor hasta los tokens de recursos
+        const char *ptr = buffer_udp;
+        for (int i = 0; i < 3; i++) {
+            while (*ptr && *ptr != ' ') ptr++;
+            while (*ptr == ' ') ptr++;
+        }
+        char tok[64];
+        while (sscanf(ptr, "%63s", tok) == 1) {
+            char res[16]; int val;
+            if (sscanf(tok, "%15[^:]:%d", res, &val) == 2) {
+                if      (strcmp(res, "cpu") == 0) cpu = val;
+                else if (strcmp(res, "gpu") == 0) gpu = val;
+                else if (strcmp(res, "mem") == 0) mem = val;
+            }
+            while (*ptr && *ptr != ' ') ptr++;
+            while (*ptr == ' ') ptr++;
+        }
+        gestor_procesar_anuncio(estado, ip_node, puerto_node, cpu, gpu, mem);
+        return 1;
+    }
+    return 0;
+}
+
+void anunciar_recursos(void) {
+    uint64_t expiraciones;
+    read(timer_anuncios_fd, &expiraciones, sizeof(expiraciones));
+
+    int disp_cpu, disp_gpu, disp_mem;
+    gestor_recursos_disponibles(estado, &disp_cpu, &disp_gpu, &disp_mem);
+
+    char msj[TAM_BUFFER_ANUNCIO];
+    snprintf(msj, sizeof(msj), "ANNOUNCE %d cpu:%d gpu:%d mem:%d\n",
+             PUERTO_TCP, disp_cpu, disp_gpu, disp_mem);
+    enviar_mensaje_udp(usock_udp, IP_BROADCAST, PUERTO_UDP, msj);
+}
+
+void timer_deadlock_nodos(void) {
+    uint64_t expiraciones;
+    read(timer_timeout, &expiraciones, sizeof(expiraciones));
+    // Expirar RESERVE encolados vencidos (anti-deadlock)
+    gestor_expirar_pedidos(estado, notificar_denied_timeout);
+    // Desconectar nodos que no enviaron ANNOUNCE recientemente
+    gestor_desconectar_nodos(estado);
 }
 

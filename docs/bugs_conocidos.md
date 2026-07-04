@@ -166,3 +166,115 @@ Revisado a fondo, sin bugs. El módulo mantiene una lista y una tabla hash en
 paralelo apuntando a los mismos `JobActivo`, con un orden de liberación
 específico para no hacer doble free (documentado con comentarios en
 `destruir_tabla_jobs` y `no_destruye_job`), pero el orden actual es correcto.
+
+---
+
+# Bugs conocidos — revisión de archivos núcleo
+
+Esta segunda tanda sale de revisar los archivos núcleo del agente (todavía sin
+refactorizar por completo): `Sockets.c`, `cliente.c/.h`, `gestor_estado.c` y la
+función `main` de `Agente.c`. Al igual que los anteriores, ninguno rompe la
+compilación ni los tests: `test/test_deadlock_simple.sh` compila **solo** el
+gestor y el modelo (sin sockets), así que nada de lo de abajo se ejercita ahí.
+
+---
+
+## `Sockets.c` / `Sockets.h`
+
+### 5. `mk_udp_lsock` usa `SO_REUSEADDR` donde el comentario pide `SO_REUSEPORT`
+
+**Dónde:** `Sockets.c`, dentro de `mk_udp_lsock` (el `setsockopt` del socket UDP);
+marcado con un comentario `// BUG:` en el lugar exacto.
+
+**Qué pasa:** el comentario del propio código declara la intención —"que varios
+nodos en la misma PC de pruebas escuchen el mismo broadcast"— que es
+exactamente el caso de uso de `SO_REUSEPORT`. Pero el código activa
+`SO_REUSEADDR`.
+
+**Por qué importa:** en Linux, para tener **varios sockets bindeados al mismo
+puerto UDP con `INADDR_ANY`**, `SO_REUSEADDR` no alcanza: el segundo `bind()`
+falla con `EADDRINUSE`. Como el bind está envuelto en `quit()`, el **segundo
+agente lanzado en la misma máquina aborta al arrancar**. Es decir, correr dos o
+más agentes en un mismo host (el escenario típico de prueba de
+autodescubrimiento por UDP) no funciona. No se dispara en
+`test_deadlock_simple.sh` porque ese test nunca crea sockets.
+
+**Fix sugerido:** usar `SO_REUSEPORT` (o `SO_REUSEADDR | SO_REUSEPORT`) en ese
+`setsockopt`. No se aplicó todavía por consigna (solo documentar).
+
+### Robustez menor (no rompen el flujo feliz)
+
+- **`obtener_mi_ip_local`**: no chequea el retorno de `connect()` ni
+  `getsockname()`. Si `getsockname` fallara, `name` queda sin inicializar y el
+  `inet_ntoa(name.sin_addr)` copiaría basura o `0.0.0.0` a `mi_ip_publica`.
+  Impacto bajo (el fallback inicial ya cubre el caso de socket no creado), pero
+  conviene validar y caer a `"127.0.0.1"` también acá.
+- **`mk_tcp_lsock` / `mk_udp_lsock`**: `struct sockaddr_in sa` no se hace
+  `memset` a 0 antes del `bind` (a diferencia de `conectar_a_nodo` y
+  `obtener_mi_ip_local`, que sí lo hacen). El padding `sin_zero` queda sin
+  inicializar. En la práctica `bind` con `AF_INET` lo ignora, pero es
+  inconsistente y es buena higiene ponerlo en cero.
+- **`inet_addr(ip)`** no se valida: ante una IP mal formada devuelve
+  `INADDR_NONE` (0xFFFFFFFF) sin avisar. Hoy la IP viene de `getsockname`, así
+  que no se dispara, pero es un `bind` a una dirección basura latente.
+
+### Código muerto / limpieza (ya aplicada en esta revisión)
+
+- Se eliminó el `extern char mi_ip_publica[16];` que estaba al tope de
+  `Sockets.c`: ninguna función del archivo lo usaba (todas reciben la IP por
+  parámetro). La variable sigue viviendo en `Agente.c` y su `extern` está en
+  `Agente.h`.
+- El backlog hardcodeado `10` de `listen()` pasó a la constante `BACKLOG_TCP`.
+
+---
+
+## `cliente.c` / `cliente.h`
+
+Sin bugs de comportamiento. Observaciones:
+
+- **`crear_cliente_conectado` no chequea el `malloc`** → NULL-deref si el
+  sistema se queda sin memoria. Es el mismo patrón que el resto del proyecto
+  (`recurso_crear`, `crear_nodo`, etc. tampoco chequean), así que se deja como
+  está por consistencia; se anota como deuda de robustez global.
+- **No hay `destruir_cliente_conectado`**: los `ClienteConectado` se liberan con
+  `free()` crudo desde `Agente.c` (`bucle_principal`) y el `close(fd)+free` está
+  duplicado en `nodo_destruir`. Un destructor propio (`close(fd)` + `free`)
+  centralizaría eso y ayudaría a coordinar el fix del bug de concurrencia #2
+  (use-after-free de la conexión cacheada). Sugerencia de refactor, no bug.
+
+**Ubicación del módulo:** `ClienteConectado` no es modelo de dominio (no es un
+recurso/job/nodo); es infraestructura de transporte —un fd + su buffer de
+acumulación—, fuertemente acoplado a `Sockets.c`. Recomendación: **no** moverlo
+a `modelo/`. Lo natural es agruparlo con la capa de red (junto a `Sockets`),
+idealmente en una carpeta `red/` que contenga `Sockets.*` + `cliente.*`. Si no
+se quiere tocar el `Makefile`/includes ahora, dejarlo en la raíz junto a
+`Sockets` es aceptable.
+
+---
+
+## `gestor_estado.c` (hasta `estado_destruir`)
+
+Sin bugs en el tramo revisado (callbacks de Cola/TablaHash, `obtener_recurso`,
+`estado_crear`, `estado_destruir`). Observaciones:
+
+- **`estado_crear` no chequea el `malloc`** (mismo criterio que arriba).
+- **`estado_destruir` no tiene ningún llamador**: `main` corre un servidor
+  infinito y nunca lo invoca. Es código muerto de facto (no es un bug; se anota
+  para eventual limpieza o para cuando se agregue un apagado ordenado).
+
+---
+
+## `Agente.c` — `main` / `agregar_cliente_en_epoll`
+
+Sin bugs de comportamiento. Observaciones:
+
+- **`agregar_fd_en_epoll`** (declarada en `Agente.h`, definida en `Agente.c`) no
+  tiene ningún llamador → código muerto candidato a eliminar. (No se tocó: está
+  fuera del alcance de esta pasada, que fue `main` + `agregar_cliente_en_epoll`.)
+- **Leak "still-reachable"**: los 5 `ClienteConectado` que envuelven los sockets
+  de escucha y los timers se crean con `crear_cliente_conectado` y nunca se
+  liberan. Como viven toda la vida del proceso no crecen, pero `valgrind`
+  (`make valgrind`) los reporta como bloques aún alcanzables al salir.
+- **Pregunta respondida (`estado` == NULL al llegar un TCP?)**: no. `estado` se
+  inicializa en `main` *antes* de crear el epoll, registrar sockets y lanzar los
+  hilos, así que cuando cualquier worker procesa un mensaje el estado ya existe.

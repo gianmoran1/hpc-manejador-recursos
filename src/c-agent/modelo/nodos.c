@@ -1,4 +1,5 @@
 #include "nodos.h"
+#include "config.h"
 #include <assert.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -108,7 +109,7 @@ void desconectar(TablaNodos tabla_nodos){
     while (temp != NULL) {  // Hay nodos, elimina los que corresponda
         tiempo_nodo = ((Nodo)temp->data)->ultimo_anuncio;
         
-        if (difftime(ahora, tiempo_nodo) >= 15.0) {
+        if (difftime(ahora, tiempo_nodo) >= TIEMPO_VIDA_NODO) {
             GList next = temp->next;
             tablahash_eliminar(tabla_nodos->tabla, temp->data);
             free(temp);
@@ -123,7 +124,7 @@ void desconectar(TablaNodos tabla_nodos){
 
     while (temp->next != NULL) {
         tiempo_nodo = ((Nodo)temp->next->data)->ultimo_anuncio; 
-        if (difftime(ahora, tiempo_nodo) >= 15.0) {
+        if (difftime(ahora, tiempo_nodo) >= TIEMPO_VIDA_NODO) {
             GList next = temp->next->next;
             tablahash_eliminar(tabla_nodos->tabla, temp->next->data);
             free(temp->next);

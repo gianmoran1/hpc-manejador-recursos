@@ -3,11 +3,11 @@
 
 /*INTERFAZ PRINCIPAL DEL GESTOR DE ESTADO, PARA USAR EN EL LOOP DE EPOLL*/
 
-#include "./modelo/recursos.h"
-#include "./modelo/jobs.h"
-#include "./modelo/nodos.h"
-#include "./modelo/transacciones.h"
-#include "./estructuras/tablahash.h"
+#include "modelo/recursos.h"
+#include "modelo/jobs.h"
+#include "modelo/nodos.h"
+#include "modelo/transacciones.h"
+#include "estructuras/tablahash.h"
 #include <pthread.h>
 
 typedef struct estadoGlobal_ {
@@ -21,10 +21,15 @@ typedef struct estadoGlobal_ {
 } *EstadoGlobal;
 
 
-/*crea un estado global*/
+/* Crea e inicializa el estado global del agente con las capacidades dadas de
+ * cpu, gpu y mem. Inicializa el mutex interno. Devuelve el puntero al estado. */
 EstadoGlobal estado_crear(int cap_cpu, int cap_gpu, int cap_mem);
-/*destruye un estado global*/
+/* Libera todo el estado global (recursos, jobs, nodos, peticiones y mutex). */
 void estado_destruir(EstadoGlobal estado);
+
+/* Escribe en *cpu, *gpu y *mem las unidades actualmente disponibles de cada
+ * recurso local. Toma el lock internamente. */
+void gestor_recursos_disponibles(EstadoGlobal estado, int *cpu, int *gpu, int *mem);
 
 /*RESERVE <job_id> <recurso> <cantidad>*/
 /*maneja una reserva de recurso (reserve), 1 es GRANTED, 0 es encolado, -1 es DENIED*/

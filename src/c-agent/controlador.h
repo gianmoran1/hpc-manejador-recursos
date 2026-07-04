@@ -1,7 +1,7 @@
 #ifndef __CONTROLADOR_H__
 #define __CONTROLADOR_H__
 
-#include "cliente.h" // Necesitamos saber qué es un ClienteConectado
+#include "red/cliente.h" // Necesitamos saber qué es un ClienteConectado
 /*
  * Parsea y ejecuta comandos provenientes de Erlang.
  * Maneja solicitudes locales como GET_NODES, JOB_REQUEST y JOB_RELEASE, 
@@ -24,5 +24,23 @@ void procesar_mensaje_red_c(ClienteConectado *cliente, char* msg);
  * Recibe el identificador del trabajo y el file descriptor del nodo a conceder.
  */
 void callback_granted_red(int job_id, int socket_fd);
+
+/*
+ * Handler UDP: lee un ANNOUNCE del socket UDP y actualiza el registro de nodos.
+ * Devuelve 1 si procesó un anuncio válido, 0 si no había mensaje útil.
+ */
+int parseo_anuncio(void);
+
+/*
+ * Handler del timer de anuncios: emite por broadcast UDP un ANNOUNCE con los
+ * recursos disponibles actuales del nodo.
+ */
+void anunciar_recursos(void);
+
+/*
+ * Handler del timer de mantenimiento: expira los RESERVE encolados vencidos
+ * (anti-deadlock) y desconecta los nodos sin ANNOUNCE reciente.
+ */
+void timer_deadlock_nodos(void);
 
 #endif /* __CONTROLADOR_H__ */

@@ -10,11 +10,10 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
-#include <fcntl.h> /* For O_* constants */
-#include <sys/stat.h> /* For mode constants */
-#include <sys/mman.h> /* mmap */
-#include <sys/wait.h> /* wait */
-#include <unistd.h> /* ftruncate */
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
+#include <sys/wait.h>
 #include <pthread.h>
 #include <sys/epoll.h>
 #include <signal.h>
@@ -22,11 +21,7 @@
 #include <sys/timerfd.h> /* Para timerfd_create */
 #include <time.h>
 #include <errno.h>
-#include "cliente.h"
-
-#define MAX_EVENTS 10
-#define PUERTO_TCP 4040
-#define PUERTO_UDP 12529
+#include "red/cliente.h"
 
 /*
  * Imprime un mensaje de error del sistema y aborta la ejecución del programa.
@@ -38,7 +33,7 @@ void quit(char *s);
  * Descubre la IP local de la máquina en la red realizando una conexión UDP simulada.
  * Recibe el buffer donde se escribirá la IP resultante (ej. "192.168.0.x").
  */
-void obtener_mi_ip_local(char *buffer_ip); 
+void obtener_mi_ip_local(char *buffer_ip);
 
 /*
  * Modifica las flags de un file descriptor para que opere de forma no bloqueante.
@@ -100,24 +95,10 @@ int enviar_mensaje_tcp(int fd, const char *mensaje);
 
 /*
  * Envía un datagrama UDP a un destino específico.
- * Recibe el FD del socket UDP, la IP de destino (ej. "255.255.255.255"), 
+ * Recibe el FD del socket UDP, la IP de destino (ej. "255.255.255.255"),
  * el puerto y la cadena de texto a enviar.
  * Devuelve 1 si el envío a la red fue exitoso, o -1 en caso de error.
  */
 int enviar_mensaje_udp(int usock_udp, const char *ip_destino, int puerto_destino, const char *mensaje);
 
-
-
-
-
-
-
 #endif /* __SOCKETS_H__ */
-
-
-
-
-
-
-
-

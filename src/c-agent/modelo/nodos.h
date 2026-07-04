@@ -1,9 +1,9 @@
 #ifndef __NODOS_H__
 #define __NODOS_H__
 
-#include "../estructuras/tablahash.h"
-#include "../estructuras/glist.h"
-#include "cliente.h"
+#include "estructuras/tablahash.h"
+#include "estructuras/glist.h"
+#include "red/cliente.h"
 #include <time.h>
 
 typedef struct nodo_{

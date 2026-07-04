@@ -22,7 +22,7 @@ $(TARGET): $(OBJS)
 
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -I$(SRC_DIR) -c $< -o $@
+	$(CC) $(CFLAGS) -Iinclude -I$(SRC_DIR) -c $< -o $@
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)

@@ -221,7 +221,7 @@ int main(void) {
 CTEST
 
 SRCS="gestor_estado.c modelo/recursos.c modelo/jobs.c modelo/nodos.c modelo/transacciones.c estructuras/tablahash.c estructuras/glist.c estructuras/cola.c"
-gcc -g -I"$SRC" "$BUILD/test_deadlock.c" \
+gcc -g -I"$SRC/../../include" -I"$SRC" "$BUILD/test_deadlock.c" \
     $(for f in $SRCS; do echo "$SRC/$f"; done) \
     -lpthread -o "$BUILD/test_deadlock" 2>"$BUILD/err.log" \
     && ok "test_deadlock compilado" \
