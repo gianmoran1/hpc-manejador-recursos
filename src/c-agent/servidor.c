@@ -97,12 +97,9 @@ void* bucle_principal(void* args) {
 
             // UDP: algún nodo se está anunciando con un ANNOUNCE.
             else if (fd_listo == usock_udp)
-                if (parseo_anuncio() == 0)
-                    continue;
-
+                parseo_anuncio();
             else if (fd_listo == timer_anuncios_fd)
                 anunciar_recursos();
-
             else if (fd_listo == timer_timeout)
                 timer_deadlock_nodos();
 
