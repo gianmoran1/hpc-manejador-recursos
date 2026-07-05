@@ -1,15 +1,15 @@
-# Bugs conocidos — revisión de `estructuras/` y `modelo/`
+# Bugs conocidos — agente C
 
-Este documento junta los bugs encontrados durante la revisión módulo por módulo
-de las estructuras genéricas (`src/c-agent/estructuras/`) y del modelo de
-dominio (`src/c-agent/modelo/`), hecha como parte de la refactorización del
-agente C. Todos están además marcados con un comentario `BUG:` en el lugar
-exacto del código donde ocurren.
+Bugs y observaciones encontrados en la revisión módulo por módulo del agente C.
+Los que siguen **abiertos** están además marcados con un comentario `// BUG:` en
+el lugar exacto del código. Ninguno rompe la compilación ni los tests
+(`test/test_deadlock_simple.sh`) — son casos borde, condiciones de carrera o
+límites que no se disparan con el flujo feliz.
 
-Ninguno de estos bugs impide compilar ni rompe los tests actuales
-(`test/test_deadlock_simple.sh`, 28/28 OK) — son casos borde, condiciones de
-carrera o límites no validados que no se disparan con el flujo feliz ni con
-los escenarios que cubre el test.
+> Los bugs ya resueltos (#3 tope de `nodos[]`, #5 `SO_REUSEPORT`, #6 dangling-else
+> UDP, #7 data race al llenar `peticion->nodos[]`, #8 atribución de `GRANTED`, el
+> `NULL`-deref de `gestor_buscar_nodo_por_ip`, y el de `cola`) se removieron de
+> este documento.
 
 ---
 
@@ -47,7 +47,7 @@ desde `desconectar()` cada vez que expira el timer de 15s.
 
 **Qué pasa:** `nodo_destruir` hace `close(nodo->conexion->fd)` y
 `free(nodo->conexion)`. Ese mismo puntero `ClienteConectado*` es el que
-`Agente.c` guarda en `eventos[n].data.ptr` dentro del epoll compartido por
+`servidor.c` guarda en `eventos[n].data.ptr` dentro del epoll compartido por
 los 4 hilos worker, y el despacho de eventos (`bucle_principal`) lee
 `entidad->fd` **sin tomar `estado->lock`**.
 
@@ -63,12 +63,25 @@ otro hilo, haciendo que el mensaje se procese sobre la conexión equivocada.
 "tirar abajo una conexión cacheada en `TablaNodos`" con "el epoll la está
 usando ahora mismo desde otro hilo". Conviene pensarlos y resolverlos juntos.
 
-**Relacionado (en otro archivo, no tocado en esta revisión):**
-`controlador.c:121-122` hace
-`Nodo nodo = gestor_buscar_nodo_por_ip(ip_destino, estado); int puerto_destino = nodo->puerto;`
-sin chequear que `nodo` no sea `NULL`. Si el bug #1 de arriba (u otra causa)
-hace que un nodo esperado no esté en el registro cuando llega un
-`JOB_REQUEST` para su IP, este `NULL` deref tira abajo el agente entero.
+**Relacionado — misma raíz, en `controlador.c` `erlang_job_request`:** el
+chequeo de `nodo == NULL` ya se agregó, pero **el acceso al registro de nodos en
+ese camino no está protegido por `estado->lock`**:
+
+- `gestor_buscar_nodo_por_ip` toma el lock, busca y lo **suelta antes de
+  devolver** el puntero `Nodo`. Después `nodo->puerto` se derefencia sin lock: si
+  el timer de mantenimiento (`gestor_desconectar_nodos`) libera ese nodo en el
+  medio → **use-after-free**.
+- `nodo_obtener_conexion` y `nodo_registrar_conexion` (en `nodos.c`) **no toman
+  ningún lock** (no hay un solo `pthread_mutex` en ese archivo) y tocan
+  `registro_nodos` directamente, mientras el hilo del `ANNOUNCE`
+  (`gestor_procesar_anuncio`) y el timer lo modifican bajo `estado->lock` →
+  **data race sobre la `TablaNodos`** (corrupción del hash, lecturas rotas).
+- El `ClienteConectado*` que devuelve `nodo_obtener_conexion` puede quedar
+  liberado por otro hilo antes de usar su `fd` (use-after-free, familia de #2).
+
+**Fix (junto con #1/#2):** que toda la interacción con `registro_nodos` en
+`erlang_job_request` pase por la fachada del gestor bajo `estado->lock`, y no
+retener punteros a `Nodo`/`ClienteConectado` a través de fronteras de lock.
 
 ### Código sin uso
 
@@ -76,32 +89,6 @@ hace que un nodo esperado no esté en el registro cuando llega un
 ningún otro archivo las llama (`procesar_anuncio` hace su propio upsert, y
 todo el código usa `buscar_nodo_por_ip` en vez de `buscar_nodo`). No son
 bugs, pero quedaron marcadas como candidatas a eliminar en `nodos.h`.
-
----
-
-## `modelo/transacciones.c` / `transacciones.h`
-
-### 3. `PeticionMulti.nodos[]` es de tamaño fijo y nada valida el límite antes de escribir
-
-**Dónde:** `transacciones.h`, campo `nodos[MAX_NODOS_PETICION]` del struct
-`peticionMulti_` (antes `nodos[16]`, ahora con la constante nombrada).
-
-**Qué pasa:** `total` (cuántos recursos remotos tiene el `JOB_REQUEST`) se
-calcula en `controlador.c` contando los tokens `@IP:recurso:cant` del mensaje
-que manda Erlang, y **nada valida `total <= MAX_NODOS_PETICION`** antes de
-que `controlador.c` escriba en `peticion->nodos[idx]` para `idx` creciente.
-
-**Por qué importa:** un `JOB_REQUEST` con más de 16 recursos desborda este
-arreglo fijo — es un heap buffer overflow sobre el resto del `malloc` de la
-`PeticionMulti`, con la corrupción de memoria que eso implica.
-
-**Fix sugerido:** el arreglo en sí ya tiene su tope nombrado
-(`MAX_NODOS_PETICION`, agregado en esta revisión), pero el fix real va en
-`controlador.c`: cortar o rechazar el `JOB_REQUEST` con `JOB_DENIED` si
-`total > MAX_NODOS_PETICION`, antes de llamar a `peticion_crear`.
-`controlador.c` además tiene tres arreglos propios hardcodeados en `16`
-(`fds[16]`, `recursos_rb[16][32]`, etc. en las funciones de rollback) que
-deberían pasar a usar esta misma constante cuando se toque ese archivo.
 
 ---
 
@@ -139,17 +126,6 @@ proyecto.
 
 ---
 
-## `estructuras/cola.c` / `cola.h` — ya resuelto
-
-`cola_desencolar_void` tenía un `NULL` dereference si se la llamaba con una
-cola vacía sin crear (`*cola == NULL`): el chequeo `cola != NULL` solo
-validaba el puntero-a-puntero, no el contenido, y la versión sin `_void`
-(`cola_desencolar`) sí lo validaba bien. La función (junto con
-`cola_encolar_void` y `cola_recorrer`, que tampoco se usaban) se eliminó del
-proyecto, así que el bug quedó resuelto por eliminación del código muerto.
-
----
-
 ## `estructuras/glist.c` / `glist.h` — sin bugs
 
 Revisado a fondo, sin bugs. `glist_vacia`, `glist_recorrer` y el typedef
@@ -171,38 +147,13 @@ específico para no hacer doble free (documentado con comentarios en
 
 # Bugs conocidos — revisión de archivos núcleo
 
-Esta segunda tanda sale de revisar los archivos núcleo del agente (todavía sin
-refactorizar por completo): `Sockets.c`, `cliente.c/.h`, `gestor_estado.c` y la
-función `main` de `Agente.c`. Al igual que los anteriores, ninguno rompe la
-compilación ni los tests: `test/test_deadlock_simple.sh` compila **solo** el
-gestor y el modelo (sin sockets), así que nada de lo de abajo se ejercita ahí.
+Segunda tanda: archivos núcleo del agente. Al igual que los anteriores, ninguno
+rompe la compilación ni los tests (`test/test_deadlock_simple.sh` compila **solo**
+el gestor y el modelo, sin sockets).
 
 ---
 
 ## `Sockets.c` / `Sockets.h`
-
-### 5. `mk_udp_lsock` usaba `SO_REUSEADDR` en vez de `SO_REUSEPORT` — ya resuelto
-
-**Dónde:** `Sockets.c`, dentro de `mk_udp_lsock` (el `setsockopt` del socket UDP).
-
-**Qué pasaba:** la intención era que varios agentes en la **misma** máquina
-pudieran bindear el mismo puerto UDP (`INADDR_ANY`) y todos recibieran el
-broadcast de autodescubrimiento, pero eso requiere `SO_REUSEPORT`. El código
-activaba `SO_REUSEADDR`.
-
-**Por qué importaba:** en Linux, para tener **varios sockets bindeados al mismo
-puerto UDP con `INADDR_ANY`**, `SO_REUSEADDR` no alcanza (esa excepción solo
-aplica a multicast): el segundo `bind()` falla con `EADDRINUSE`. Como el bind
-está envuelto en `quit()`, el **segundo agente lanzado en la misma máquina
-abortaba al arrancar**. Bug latente: con un solo agente por máquina (el
-escenario del enunciado) nunca se disparaba. No se ejercita en
-`test_deadlock_simple.sh` porque ese test nunca crea sockets.
-
-**Fix aplicado:** el `setsockopt` del socket UDP pasó a usar `SO_REUSEPORT`.
-Para el caso de un solo binder el comportamiento es idéntico (`SO_REUSEADDR` en
-UDP no aportaba nada relevante: su semántica de rebind rápido es de `TIME_WAIT`,
-un estado de TCP que UDP no tiene), y de paso queda habilitado el multi-agente
-en el mismo host.
 
 ### Robustez menor (no rompen el flujo feliz)
 
@@ -220,41 +171,20 @@ en el mismo host.
   `INADDR_NONE` (0xFFFFFFFF) sin avisar. Hoy la IP viene de `getsockname`, así
   que no se dispara, pero es un `bind` a una dirección basura latente.
 
-### Código muerto / limpieza (ya aplicada en esta revisión)
-
-- Se eliminó el `extern char mi_ip_publica[16];` que estaba al tope de
-  `Sockets.c`: ninguna función del archivo lo usaba (todas reciben la IP por
-  parámetro). La variable sigue viviendo en `Agente.c` y su `extern` está en
-  `Agente.h`.
-- El backlog hardcodeado `10` de `listen()` pasó a la constante `BACKLOG_TCP`.
-
 ---
 
 ## `cliente.c` / `cliente.h`
 
-Sin bugs de comportamiento. Observaciones:
+Sin bugs de comportamiento. Observación:
 
 - **`crear_cliente_conectado` no chequea el `malloc`** → NULL-deref si el
   sistema se queda sin memoria. Es el mismo patrón que el resto del proyecto
   (`recurso_crear`, `crear_nodo`, etc. tampoco chequean), así que se deja como
   está por consistencia; se anota como deuda de robustez global.
-- **No hay `destruir_cliente_conectado`**: los `ClienteConectado` se liberan con
-  `free()` crudo desde `Agente.c` (`bucle_principal`) y el `close(fd)+free` está
-  duplicado en `nodo_destruir`. Un destructor propio (`close(fd)` + `free`)
-  centralizaría eso y ayudaría a coordinar el fix del bug de concurrencia #2
-  (use-after-free de la conexión cacheada). Sugerencia de refactor, no bug.
-
-**Ubicación del módulo:** `ClienteConectado` no es modelo de dominio (no es un
-recurso/job/nodo); es infraestructura de transporte —un fd + su buffer de
-acumulación—, fuertemente acoplado a `Sockets.c`. Recomendación: **no** moverlo
-a `modelo/`. Lo natural es agruparlo con la capa de red (junto a `Sockets`),
-idealmente en una carpeta `red/` que contenga `Sockets.*` + `cliente.*`. Si no
-se quiere tocar el `Makefile`/includes ahora, dejarlo en la raíz junto a
-`Sockets` es aceptable.
 
 ---
 
-## `gestor_estado.c` (hasta `estado_destruir`)
+## `gestor_estado.c`
 
 Sin bugs en el tramo revisado (callbacks de Cola/TablaHash, `obtener_recurso`,
 `estado_crear`, `estado_destruir`). Observaciones:
@@ -266,59 +196,39 @@ Sin bugs en el tramo revisado (callbacks de Cola/TablaHash, `obtener_recurso`,
 
 ---
 
-## `Agente.c` — `main` / `agregar_cliente_en_epoll`
+## `main.c` / `servidor.c`
 
 Sin bugs de comportamiento. Observaciones:
 
-- **`agregar_fd_en_epoll`** (declarada en `Agente.h`, definida en `Agente.c`) no
-  tiene ningún llamador → código muerto candidato a eliminar. (No se tocó: está
-  fuera del alcance de esta pasada, que fue `main` + `agregar_cliente_en_epoll`.)
 - **Leak "still-reachable"**: los 5 `ClienteConectado` que envuelven los sockets
   de escucha y los timers se crean con `crear_cliente_conectado` y nunca se
   liberan. Como viven toda la vida del proceso no crecen, pero `valgrind`
   (`make valgrind`) los reporta como bloques aún alcanzables al salir.
-- **Pregunta respondida (`estado` == NULL al llegar un TCP?)**: no. `estado` se
-  inicializa en `main` *antes* de crear el epoll, registrar sockets y lanzar los
-  hilos, así que cuando cualquier worker procesa un mensaje el estado ya existe.
 
 ---
 
-## `servidor.c` — `bucle_principal` — ya resuelto
+## `controlador.c` — `procesar_mensaje_red_c`
 
-### 6. Dangling-else en el branch UDP: el agente moría al recibir el primer `ANNOUNCE`
+### Observación (a verificar, no marcada inline): RELEASE a un nodo que solo encoló
 
-**Dónde:** `servidor.c`, cadena de despacho de eventos dentro de `bucle_principal`.
+En el rollback por `DENIED` se manda `RELEASE` a **todos** los nodos, incluidos
+los que solo encolaron el `RESERVE` (no lo concedieron). `gestor_manejar_release`
+opera sobre lo **asignado** en el libro contable; un `RESERVE` que quedó en la
+cola de pendientes (sin asignar) no tiene asignación que liberar, así que el
+`RELEASE` no lo saca de la cola. Ese pedido encolado podría concederse más tarde
+(vía la redistribución greedy) y disparar un `GRANTED` a un coordinador que ya
+abandonó el job → recurso asignado a un job muerto (leak en el nodo dueño).
+Conviene confirmarlo leyendo la lógica de colas de `gestor_manejar_release`.
 
-**Qué pasaba:** el branch de UDP tenía un `if` sin llaves seguido de más `else if`:
+---
 
-```c
-else if (fd_listo == usock_udp)
-    if (parseo_anuncio() == 0)
-        continue;
-else if (fd_listo == timer_anuncios_fd)   // se ataba al if interno, no al usock_udp
-    anunciar_recursos();
-```
+## Pendiente transversal: timeout del coordinador
 
-Por la regla del dangling-else de C, los `else if` de los timers y el `else`
-final del cliente TCP quedaban **anidados dentro del branch de `usock_udp`**, no
-en la cadena externa. Efecto real: la cadena externa solo tenía dos ramas
-(sockets de escucha y UDP), y todo lo demás colgaba del UDP. Generaba además el
-warning `-Wdangling-else`.
-
-**Por qué importaba:** al llegar un `ANNOUNCE`, `parseo_anuncio()` lo procesaba y
-retornaba `1`; como no era `0`, el flujo caía por los `else if` (ambos falsos, el
-fd era el UDP) hasta el `else` final, que trataba al socket UDP como un cliente
-TCP: llamaba `atender_cliente_tcp` sobre él y luego `modificar_cliente_en_epoll`
-(`EPOLL_CTL_MOD`) sobre `usock_udp`. Pero ese socket se registró con
-`EPOLLEXCLUSIVE` en `main`, y Linux devuelve `EINVAL` ante un `EPOLL_CTL_MOD`
-sobre un fd agregado con `EPOLLEXCLUSIVE`. Resultado: `perror("Error al
-modificar cliente en el epoll: Invalid argument")` + `exit(EXIT_FAILURE)`. **El
-primer `ANNOUNCE` recibido mataba al agente**, por lo que nunca llegaba a
-conectarse con otros nodos. Como daño colateral (opacado por el crash), los
-eventos de los timers y de los clientes TCP reales tampoco matcheaban ninguna
-rama externa, así que ni los `RESERVE`/`GRANTED`/mensajes de Erlang se habrían
-procesado.
-
-**Fix aplicado:** se quitó el `if (parseo_anuncio() == 0) continue;` y el branch
-UDP quedó como `else if (fd_listo == usock_udp) parseo_anuncio();`, dejando la
-cadena `else if` de timers y cliente TCP plana al nivel externo.
+La `PeticionMulti` que crea `erlang_job_request` **no expira nunca** si un peer
+queda mudo (nunca responde `GRANTED`/`DENIED`, o el `RESERVE` no llegó). El timer
+de mantenimiento (`timer_deadlock_nodos` → `gestor_expirar_pedidos`) solo expira
+los `RESERVE` **encolados localmente**, no las `peticiones_pendientes` salientes.
+Resultado: el job se cuelga (Erlang nunca recibe `JOB_GRANTED` ni `JOB_DENIED`) y
+la petición queda leakeada. El fix vive en el timer/gestor, pero la petición nace
+en esta rama. Requiere primero definir el contrato con Erlang (qué mensaje espera
+ante un timeout: la doc menciona `JOB_TIMEOUT` pero el código reusa `JOB_DENIED`).

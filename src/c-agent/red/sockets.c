@@ -209,8 +209,6 @@ int atender_cliente_tcp(ClienteConectado *cliente) {
     return 1; 
 }
 
-//------------------------------------------------------------------------------
-
 // Conecta a un nodo y lo deja registrado en el epoll.
 // Devuelve el nuevo FD si tuvo éxito, o -1 si falló.
 int conectar_a_nodo(const char *ip_destino, int puerto_destino) {
@@ -225,9 +223,8 @@ int conectar_a_nodo(const char *ip_destino, int puerto_destino) {
     dest.sin_port = htons(puerto_destino);
     dest.sin_addr.s_addr = inet_addr(ip_destino);
 
-    printf("Iniciando conexión a %s:%d...\n", ip_destino, puerto_destino);
     int res = connect(sockfd, (struct sockaddr *)&dest, sizeof(dest));
-    
+
     if (res < 0 && (errno != EINPROGRESS)) {
         close(sockfd);
         return -1;
@@ -237,15 +234,13 @@ int conectar_a_nodo(const char *ip_destino, int puerto_destino) {
         fd_set set_escritura;
         FD_ZERO(&set_escritura);
         FD_SET(sockfd, &set_escritura);
-        
         struct timeval timeout;
         timeout.tv_sec = 2; // Límite para conectarse
         timeout.tv_usec = 0;
 
         int listos = select(sockfd + 1, NULL, &set_escritura, NULL, &timeout);
-        
         if (listos <= 0) {
-            printf("Timeout: El nodo %s:%d no responde.\n", ip_destino, puerto_destino);
+            // Timeout
             close(sockfd);
             return -1;
         }
@@ -254,26 +249,22 @@ int conectar_a_nodo(const char *ip_destino, int puerto_destino) {
         socklen_t len = sizeof(error);
         getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &error, &len);
         if (error != 0) {
-            printf("Conexión rechazada por %s:%d\n", ip_destino, puerto_destino);
+            // Conexion rechazada
             close(sockfd);
             return -1;
         }
     }
-    printf("¡Conexión establecida exitosamente con %s en el FD %d!\n", ip_destino, sockfd);
-
+    printf("[CONEXIONES] Conexión establecida exitosamente con %s en el FD %d\n", 
+            ip_destino, sockfd);
 
     return sockfd;
 }
 
-// Envía un mensaje a un cliente ya conectado. Devuelve 1 si se envió bien, o -1 si hubo un error (socket caído, etc).
+// Envía un mensaje a un cliente ya conectado. Devuelve 1 si se envió bien, o 
+/// -1 si hubo un error (socket caído, etc).
 int enviar_mensaje_tcp(int fd, const char *mensaje) {
     ssize_t enviados = send(fd, mensaje, strlen(mensaje), 0);
-    
-    if (enviados <= 0) {
-        printf("Error: No se pudo enviar al FD %d (socket roto o caído).\n", fd);
-        return -1; 
-    }
-    
-    printf("Mensaje enviado correctamente al FD %d: %s", fd, mensaje);
+    if (enviados <= 0) // Socket roto o caido.
+        return -1;
     return 1;
 }

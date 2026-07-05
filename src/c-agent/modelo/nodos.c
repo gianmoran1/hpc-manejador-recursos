@@ -158,7 +158,7 @@ void procesar_anuncio(TablaNodos tabla_nodos, char* ip, int puerto, int cpu,
 }
 
 char* get_nodes(TablaNodos tabla_nodos) {
-    int capacidad_actual = 2048; // Búfer inicial de 2KB
+    int capacidad_actual = 2048;
     char* buffer = malloc(capacidad_actual);
     if (!buffer) return NULL;
     
@@ -190,7 +190,6 @@ char* get_nodes(TablaNodos tabla_nodos) {
         buffer = realloc(buffer, capacidad_actual);
     }
     strcat(buffer, "\n");
-
     return buffer;
 }
 
@@ -204,7 +203,7 @@ int buscar_nodo(char* ip, int puerto, TablaNodos tabla_nodos){
     return encontrado != NULL;
 }
 
-Nodo buscar_nodo_por_ip(char* ip, TablaNodos tabla_nodos){
+Nodo buscar_nodo_por_ip(char* ip, TablaNodos tabla_nodos) {
     struct nodo_ busqueda;
     strncpy(busqueda.ip, ip, (sizeof(busqueda.ip) - 1));
     busqueda.ip[sizeof(busqueda.ip) - 1] = '\0';
@@ -231,6 +230,8 @@ void nodo_registrar_conexion(char* ip, int puerto, ClienteConectado* cliente, Ta
     Nodo n = buscar_nodo_ptr(ip, puerto, tabla_nodos);
     if (n != NULL) n->conexion = cliente;
 }
+
+
 
 void nodo_limpiar_conexion_por_fd(int fd, TablaNodos tabla_nodos) {
     GList temp = tabla_nodos->lista;
@@ -262,7 +263,8 @@ void nodo_limpiar_conexion_por_fd(int fd, TablaNodos tabla_nodos) {
     while (temp->next != NULL) {
         Nodo n_siguiente = (Nodo)temp->next->data;
 
-        if (n_siguiente != NULL && n_siguiente->conexion != NULL && n_siguiente->conexion->fd == fd) {
+        if (n_siguiente != NULL && n_siguiente->conexion != NULL && 
+                n_siguiente->conexion->fd == fd) {
             n_siguiente->conexion = NULL;
             tablahash_eliminar(tabla_nodos->tabla, n_siguiente);
 

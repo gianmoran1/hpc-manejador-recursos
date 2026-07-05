@@ -13,6 +13,21 @@
 
 EstadoGlobal estado = NULL;
 
+// Helpers estáticos de este módulo (definidos más abajo).
+static void procesar_mensaje_erlang(ClienteConectado *cliente, char* msg);
+static void erlang_get_nodes(ClienteConectado *cliente);
+static void erlang_job_request(ClienteConectado *cliente, int job_id, char* msg);
+static void erlang_job_release(int job_id);
+static void rollback_y_denegar(int job_id, int socket_erlang, int n_enviados);
+
+static void procesar_mensaje_red_c(ClienteConectado *cliente, char* msg);
+static void red_reserve(ClienteConectado *cliente, int job_id, char* recurso, int cant_res);
+static void red_granted(ClienteConectado *cliente, int job_id);
+static void red_denied(int job_id);
+static void red_release(int job_id, char* recurso, int cant_res);
+
+// -----------------------------------------------------------------------------
+
 void controlador_anuncio_recibido(char* buffer_udp) {
     char ip_node[50], cmd[32];
     int puerto_node = 0, cpu = 0, gpu = 0, mem = 0;
@@ -39,6 +54,8 @@ void controlador_anuncio_recibido(char* buffer_udp) {
     }
 }
 
+// -----------------------------------------------------------------------------
+
 void controlador_anuncio_recursos() {
     uint64_t _expiraciones;
     read(timer_anuncios_fd, &_expiraciones, sizeof(_expiraciones));
@@ -52,16 +69,22 @@ void controlador_anuncio_recursos() {
     enviar_mensaje_udp(usock_udp, IP_BROADCAST, PUERTO_UDP, msj);
 }
 
-
-
-
+// -----------------------------------------------------------------------------
 
 void controlador_desconexion_cliente(int cliente_fd) {
     manejar_desconexion_socket(estado, cliente_fd, callback_granted_red);
-    // Evitar que nodo_destruir intente close+free de un ClienteConectado
-    // que ya vamos a liberar nosotros justo debajo.
     nodo_limpiar_conexion_por_fd(cliente_fd, estado->registro_nodos);
 }
+
+// Callback C-C: notifica a un nodo coordinador que su RESERVE encolado fue concedido.
+// Usa "GRANTED" (protocolo C-C), no "JOB_GRANTED" (que es solo para Erlang).
+void callback_granted_red(int job_id, int socket_fd) {
+    char msj[64];
+    snprintf(msj, sizeof(msj), "GRANTED %d\n", job_id);
+    enviar_mensaje_tcp(socket_fd, msj);
+}
+
+// -----------------------------------------------------------------------------
 
 void controlador_mensaje_cliente(ClienteConectado *cliente) {
     char *salto_linea;
@@ -86,24 +109,162 @@ void controlador_mensaje_cliente(ClienteConectado *cliente) {
     }
 }
 
+static void procesar_mensaje_erlang(ClienteConectado *cliente, char* msg) {
+    char comando[32];
+    int job_id = -1;
+    char recursos[128];
+    int parseados = sscanf(msg, "%31s %d %127s", comando, &job_id, recursos);
+    if (parseados < 1)
+        return;
 
-
-
-
-
-
-// Callback C-C: notifica a un nodo coordinador que su RESERVE encolado fue concedido.
-// Usa "GRANTED" (protocolo C-C), no "JOB_GRANTED" (que es solo para Erlang).
-void callback_granted_red(int job_id, int socket_fd) {
-    char msj[64];
-    snprintf(msj, sizeof(msj), "GRANTED %d\n", job_id);
-    enviar_mensaje_tcp(socket_fd, msj);
+    if (strcmp(comando, "GET_NODES") == 0 && parseados == 1)
+        erlang_get_nodes(cliente);
+    else if (strcmp(comando, "JOB_REQUEST") == 0 && parseados >= 2)
+        erlang_job_request(cliente, job_id, msg);
+    else if (strcmp(comando, "JOB_RELEASE") == 0 && parseados == 2)
+        erlang_job_release(job_id);
 }
 
-// ── Helper: cancela todos los RESERVE ya enviados y notifica JOB_DENIED ─────
+// Erlang pide la tabla de nodos conocidos del clúster.
+static void erlang_get_nodes(ClienteConectado *cliente) {
+    printf("[CONTROLADOR] Erlang hace GET_NODES\n");
+    char *nodos = gestor_get_nodes(estado);
+    if (nodos != NULL) {
+        enviar_mensaje_tcp(cliente->fd, nodos);
+        free(nodos);
+    }
+}
+
+// Erlang envía: JOB_REQUEST <id> @IP:recurso:cant [@IP2:recurso2:cant2 ...]
+// Conecta a cada nodo destino y le manda un RESERVE; ante cualquier fallo hace
+// rollback de lo ya enviado y devuelve JOB_DENIED.
+static void erlang_job_request(ClienteConectado *cliente, int job_id, char* msg) {
+    char recursos[128] = {0};
+    sscanf(msg, "%*s %*d %127s", recursos);
+    printf("[CONTROLADOR] Erlang pide RECURSOS: %s para el trabajo %d\n", recursos, job_id);
+
+    // Avanzamos el cursor hasta el primer token @IP:...
+    const char *cursor = msg;
+    while (*cursor && *cursor != ' ') cursor++;
+    while (*cursor == ' ') cursor++;
+    while (*cursor && *cursor != ' ') cursor++;
+    while (*cursor == ' ') cursor++;
+
+    // Contar tokens para saber cuántos RESERVE vamos a enviar
+    int total = 0;
+    {
+        const char *tmp = cursor;
+        char tok[128];
+        while (sscanf(tmp, "%127s", tok) == 1) {
+            if (tok[0] == '@') total++;
+            while (*tmp && *tmp != ' ') tmp++;
+            while (*tmp == ' ') tmp++;
+        }
+    }
+    if (total == 0 || total > MAX_NODOS_PETICION) {
+        char msj[64];
+        snprintf(msj, sizeof(msj), "JOB_DENIED %d\n", job_id);
+        enviar_mensaje_tcp(cliente->fd, msj);
+        return;
+    }
+
+    // Crear y registrar la peticion antes de enviar los RESERVE.
+    PeticionMulti peticion = peticion_crear(job_id, cliente->fd, total);
+    gestor_registrar_peticion(estado, peticion);
+
+    // Conectar y enviar RESERVE a cada nodo
+    int idx = 0;
+    char token[128];
+    while (sscanf(cursor, "%127s", token) == 1) {
+        char ip_destino[50], nombre_recurso[32];
+        int cantidad;
+
+        if (sscanf(token, "@%49[^:]:%31[^:]:%d",
+                   ip_destino, nombre_recurso, &cantidad) != 3) {
+            rollback_y_denegar(job_id, cliente->fd, idx);
+            return;
+        }
+
+        Nodo nodo = gestor_buscar_nodo_por_ip(ip_destino, estado);
+        if (nodo == NULL) {
+            rollback_y_denegar(job_id, cliente->fd, idx);
+            return;
+        }
+        int puerto_destino = nodo->puerto;
+        // Reutilizar conexión existente al nodo; si no hay, abrir una nueva y registrarla.
+        ClienteConectado *cx = nodo_obtener_conexion(ip_destino, puerto_destino,
+                                                    estado->registro_nodos);
+        int fd_destino;
+        if (cx != NULL) {
+            fd_destino = cx->fd;
+        } else {
+            fd_destino = conectar_a_nodo(ip_destino, puerto_destino);
+            if (fd_destino != -1) {
+                ClienteConectado *nueva = crear_cliente_conectado(fd_destino, 0);
+                servidor_agregar_cliente_en_epoll(nueva, EPOLLIN | EPOLLONESHOT);
+                nodo_registrar_conexion(ip_destino, puerto_destino, nueva,
+                                        estado->registro_nodos);
+            }
+        }
+
+        if (fd_destino == -1) {
+            rollback_y_denegar(job_id, cliente->fd, idx);
+            return;
+        }
+
+        pthread_mutex_lock(&estado->lock);
+        peticion->nodos[idx].fd_remoto = fd_destino;
+        strncpy(peticion->nodos[idx].recurso, nombre_recurso,
+                sizeof(peticion->nodos[idx].recurso) - 1);
+        peticion->nodos[idx].cantidad = cantidad;
+        peticion->nodos[idx].grantado = 0;
+        idx++;
+        pthread_mutex_unlock(&estado->lock);
+
+        char msj_red[128];
+        snprintf(msj_red, sizeof(msj_red), "RESERVE %d %s %d\n",
+                 job_id, nombre_recurso, cantidad);
+        enviar_mensaje_tcp(fd_destino, msj_red);
+
+        while (*cursor && *cursor != ' ') cursor++;
+        while (*cursor == ' ') cursor++;
+    }
+}
+
+// Erlang avisa que el trabajo terminó: manda RELEASE a todos los nodos remotos de
+// la peticion y la destruye.
+static void erlang_job_release(int job_id) {
+    int fds[MAX_NODOS_PETICION]; 
+    char recursos_jb[MAX_NODOS_PETICION][32]; 
+    int cantidades_jb[MAX_NODOS_PETICION]; int n = 0;
+    pthread_mutex_lock(&estado->lock);
+    PeticionMulti p = gestor_buscar_peticion(estado, job_id);
+    if (p) {
+        for (int i = 0; i < p->total; i++) {
+            fds[n] = p->nodos[i].fd_remoto;
+            strncpy(recursos_jb[n], p->nodos[i].recurso, 31);
+            recursos_jb[n][31] = '\0';
+            cantidades_jb[n] = p->nodos[i].cantidad;
+            n++;
+        }
+        gestor_eliminar_peticion(estado, job_id);
+    }
+    pthread_mutex_unlock(&estado->lock);
+
+    for (int i = 0; i < n; i++) {
+        char msj[64];
+        snprintf(msj, sizeof(msj), "RELEASE %d %s %d\n", job_id, recursos_jb[i], 
+                cantidades_jb[i]);
+        enviar_mensaje_tcp(fds[i], msj);
+    }
+}
+
+// Helper: cancela todos los RESERVE ya enviados y notifica JOB_DENIED.
 // Debe llamarse sin tener el lock tomado.
 static void rollback_y_denegar(int job_id, int socket_erlang, int n_enviados) {
-    int fds[16]; char recursos_rb[16][32]; int cantidades_rb[16]; int n = 0;
+    int fds[MAX_NODOS_PETICION]; char recursos_rb[MAX_NODOS_PETICION][32]; 
+    int cantidades_rb[MAX_NODOS_PETICION];
+    int n = 0;
 
     pthread_mutex_lock(&estado->lock);
     PeticionMulti p = gestor_buscar_peticion(estado, job_id);
@@ -129,267 +290,113 @@ static void rollback_y_denegar(int job_id, int socket_erlang, int n_enviados) {
     enviar_mensaje_tcp(socket_erlang, msj);
 }
 
-// =========================================================================
-// INTERFAZ CON ERLANG (Comunicación Local)
-// =========================================================================
-void procesar_mensaje_erlang(ClienteConectado *cliente, char* msg) {
-    char comando[32];
-    int job_id = -1;
-    char recursos[128];
-
-    int parseados = sscanf(msg, "%31s %d %127s", comando, &job_id, recursos);
-
-    if (parseados >= 1) {
-
-        // Erlang pide la tabla de nodos conocidos para calcular los recursos del cluster
-        if (strcmp(comando, "GET_NODES") == 0 && parseados == 1) {
-            char *nodos = gestor_get_nodes(estado);
-            if (nodos != NULL) {
-                enviar_mensaje_tcp(cliente->fd, nodos);
-                free(nodos);
-            }
-            // printf("nodos enviados a erlang\n");
-            return;
-        }
-
-        // Erlang envía: JOB_REQUEST <id> @IP:recurso:cant [@IP2:recurso2:cant2 ...]
-        if (strcmp(comando, "JOB_REQUEST") == 0 && parseados >= 2) {
-            printf("[CONTROLADOR] Erlang pide RECURSOS: %s para el trabajo %d\n", recursos, job_id);
-
-            // Avanzamos el cursor hasta el primer token @IP:...
-            const char *cursor = msg;
-            while (*cursor && *cursor != ' ') cursor++;
-            while (*cursor == ' ') cursor++;
-            while (*cursor && *cursor != ' ') cursor++;
-            while (*cursor == ' ') cursor++;
-
-            // ── Pasada 1: contar tokens para saber cuántos RESERVE vamos a enviar ──
-            int total = 0;
-            {
-                const char *tmp = cursor;
-                char tok[128];
-                while (sscanf(tmp, "%127s", tok) == 1) {
-                    if (tok[0] == '@') total++;
-                    while (*tmp && *tmp != ' ') tmp++;
-                    while (*tmp == ' ') tmp++;
-                }
-            }
-            if (total == 0) {
-                printf("[CONTROLADOR] JOB_REQUEST %d sin tokens válidos\n", job_id);
-                char msj[64];
-                snprintf(msj, sizeof(msj), "JOB_DENIED %d\n", job_id);
-                enviar_mensaje_tcp(cliente->fd, msj);
-                return;
-            }
-
-            // ── Crear y registrar la peticion ANTES de enviar los RESERVE ──
-            PeticionMulti peticion = peticion_crear(job_id, cliente->fd, total);
-            gestor_registrar_peticion(estado, peticion);
-
-            // ── Pasada 2: conectar y enviar RESERVE a cada nodo ──
-            int idx = 0;
-            char token[128];
-            while (sscanf(cursor, "%127s", token) == 1) {
-                char ip_destino[50], nombre_recurso[32];
-                int cantidad;
-
-                if (sscanf(token, "@%49[^:]:%31[^:]:%d",
-                           ip_destino, nombre_recurso, &cantidad) != 3) {
-                    printf("[CONTROLADOR] Token mal formado en JOB_REQUEST: '%s'\n", token);
-                    rollback_y_denegar(job_id, cliente->fd, idx);
-                    return;
-                }
-                Nodo nodo = gestor_buscar_nodo_por_ip(ip_destino, estado);
-                int puerto_destino = nodo->puerto;
-                // Reutilizar conexión existente al nodo; si no hay, abrir una nueva y registrarla.
-                ClienteConectado *cx = nodo_obtener_conexion(ip_destino, puerto_destino,
-                                                             estado->registro_nodos);
-                int fd_destino;
-                if (cx != NULL) {
-                    fd_destino = cx->fd;
-                } else {
-                    printf("tratando de conectar\n");
-                    fd_destino = conectar_a_nodo(ip_destino, puerto_destino);
-                    if (fd_destino != -1) {
-                        ClienteConectado *nueva = crear_cliente_conectado(fd_destino, 0);
-                        servidor_agregar_cliente_en_epoll(nueva, EPOLLIN | EPOLLONESHOT);
-                        nodo_registrar_conexion(ip_destino, puerto_destino, nueva,
-                                                estado->registro_nodos);
-                    }
-                }
-
-                if (fd_destino == -1) {
-                    printf("[CONTROLADOR] No se pudo conectar a %s para job %d\n",
-                           ip_destino, job_id);
-                    rollback_y_denegar(job_id, cliente->fd, idx);
-                    return;
-                }
-
-                // Registrar el nodo en la peticion y enviar RESERVE
-                peticion->nodos[idx].fd_remoto = fd_destino;
-                strncpy(peticion->nodos[idx].recurso, nombre_recurso,
-                        sizeof(peticion->nodos[idx].recurso) - 1);
-                peticion->nodos[idx].cantidad = cantidad;
-                peticion->nodos[idx].grantado = 0;
-                idx++;
-
-                char msj_red[128];
-                snprintf(msj_red, sizeof(msj_red), "RESERVE %d %s %d\n",
-                         job_id, nombre_recurso, cantidad);
-                enviar_mensaje_tcp(fd_destino, msj_red);
-
-                while (*cursor && *cursor != ' ') cursor++;
-                while (*cursor == ' ') cursor++;
-            }
-        }
-
-        // Erlang avisa que el trabajo terminó: liberamos recursos en nodos remotos y locales
-        else if (strcmp(comando, "JOB_RELEASE") == 0 && parseados == 2) {
-            // 1. Enviar RELEASE a todos los nodos remotos de esta peticion
-            int fds[16]; char recursos_jb[16][32]; int cantidades_jb[16]; int n = 0;
-            pthread_mutex_lock(&estado->lock);
-            PeticionMulti p = gestor_buscar_peticion(estado, job_id);
-            if (p) {
-                for (int i = 0; i < p->total; i++) {
-                    fds[n] = p->nodos[i].fd_remoto;
-                    strncpy(recursos_jb[n], p->nodos[i].recurso, 31);
-                    recursos_jb[n][31] = '\0';
-                    cantidades_jb[n] = p->nodos[i].cantidad;
-                    n++;
-                }
-                gestor_eliminar_peticion(estado, job_id);
-            }
-            pthread_mutex_unlock(&estado->lock);
-
-            for (int i = 0; i < n; i++) {
-                char msj[64];
-                snprintf(msj, sizeof(msj), "RELEASE %d %s %d\n", job_id, recursos_jb[i], cantidades_jb[i]);
-                enviar_mensaje_tcp(fds[i], msj);
-            }
-        }
-
-        else {
-            printf("[CONTROLADOR] Comando de Erlang no reconocido o mal formado: %s\n", msg);
-        }
-    }
-}
-
-
-// =========================================================================
-// INTERFAZ CON RED C (Comunicación Externa)
-// =========================================================================
-void procesar_mensaje_red_c(ClienteConectado *cliente, char* msg) {
+static void procesar_mensaje_red_c(ClienteConectado *cliente, char* msg) {
     char comando[32];
     int job_id = -1;
     char recurso[32];
     int cant_res = 0;
     int parseados = sscanf(msg, "%31s %d %31s %d", comando, &job_id, recurso, &cant_res);
+    if (parseados < 1)
+        return;
 
-    if (parseados >= 1) {
+    if (strcmp(comando, "RESERVE") == 0 && parseados == 4)
+        red_reserve(cliente, job_id, recurso, cant_res);
+    else if (strcmp(comando, "GRANTED") == 0 && parseados >= 2)
+        red_granted(cliente, job_id);
+    else if (strcmp(comando, "DENIED") == 0 && parseados >= 2)
+        red_denied(job_id);
+    else if (strcmp(comando, "RELEASE") == 0 && parseados == 4)
+        red_release(job_id, recurso, cant_res);
+}
 
-        // CASO 1: Otro agente nos pide reservar recursos nuestros
-        if (strcmp(comando, "RESERVE") == 0 && parseados == 4) {
-            printf("[CONTROLADOR] El FD %d intenta reservar localmente %s %d para el trabajo %d\n",
-                   cliente->fd, recurso, cant_res, job_id);
-            // CHEQUEAR PORQUE NO RESERVA BIEN CUANDO RECIBE DE OTRO NODO, DEVUELVE SIEMPRE DENIED
-            // char nombre_res[32]; int cant_res = 0; int resultado_res = -1;
-            // if (sscanf(recursos, "%31[^:]:%d", nombre_res, &cant_res) == 2)
-            int resultado_res = -1;
-            resultado_res = gestor_manejar_reserva(estado, recurso, job_id, cliente->fd, cant_res);
+// Otro agente nos pide reservar un recurso local para un job suyo.
+static void red_reserve(ClienteConectado *cliente, int job_id, char* recurso, int cant_res) {
+    printf("[CONTROLADOR] El FD %d intenta reservar localmente %s %d para el trabajo %d\n",
+            cliente->fd, recurso, cant_res, job_id);
+    int resultado = gestor_manejar_reserva(estado, recurso, job_id, cliente->fd, cant_res);
+    if (resultado == 1) {
+        char rsp[64];
+        snprintf(rsp, sizeof(rsp), "GRANTED %d\n", job_id);
+        enviar_mensaje_tcp(cliente->fd, rsp);
+    } else if (resultado == -1) {
+        char rsp[64];
+        snprintf(rsp, sizeof(rsp), "DENIED %d\n", job_id);
+        enviar_mensaje_tcp(cliente->fd, rsp);
+    }
+    // resultado == 0: encolado; callback_granted_red avisará cuando haya recursos.
+}
 
-            if (resultado_res == 1) {
-                char rsp[64];
-                snprintf(rsp, sizeof(rsp), "GRANTED %d\n", job_id);
-                enviar_mensaje_tcp(cliente->fd, rsp);
-            } else if (resultado_res == -1) {
-                char rsp[64];
-                snprintf(rsp, sizeof(rsp), "DENIED %d\n", job_id);
-                enviar_mensaje_tcp(cliente->fd, rsp);
-            }
-            // resultado_res == 0: encolado; callback avisará cuando haya recursos
-        }
+// Un nodo nos responde GRANTED a un RESERVE que le mandamos. Cuando TODOS los
+// nodos de la peticion respondieron, avisamos JOB_GRANTED a Erlang.
+static void red_granted(ClienteConectado *cliente, int job_id) {
+    printf("[CONTROLADOR] Reserva exitosa en otro nodo para el trabajo %d\n", job_id);
 
-        // CASO 2: Un agente nos responde a un RESERVE que nosotros le mandamos antes
-        else if (strcmp(comando, "GRANTED") == 0 && parseados >= 2) {
-            printf("[CONTROLADOR] ¡Reserva exitosa en otro nodo para el trabajo %d!\n", job_id);
-
-            int enviar_granted = 0, skt_erlang = -1;
-
-            pthread_mutex_lock(&estado->lock);
-            PeticionMulti p = gestor_buscar_peticion(estado, job_id);
-            if (p) {
-                NodoReserva *nr = peticion_buscar_nodo_por_fd(p, cliente->fd);
-                if (nr) nr->grantado = 1;
-                p->respondidos++;
-                if (p->respondidos == p->total) {
-                    enviar_granted = 1;
-                    skt_erlang = p->socket_erlang;
-                    // No destruir: la peticion se necesita hasta JOB_RELEASE
-                }
-            }
-            pthread_mutex_unlock(&estado->lock);
-
-            if (enviar_granted) {
-                char msj[64];
-                snprintf(msj, sizeof(msj), "JOB_GRANTED %d\n", job_id);
-                enviar_mensaje_tcp(skt_erlang, msj);
-            }
-        }
-
-        // CASO 3: Un agente rechazó nuestro RESERVE → rollback de todos los nodos
-        else if (strcmp(comando, "DENIED") == 0 && parseados >= 2) {
-            printf("[CONTROLADOR] Reserva rechazada por otro nodo para el trabajo %d.\n", job_id);
-
-            int fds[16]; char recursos_dn[16][32]; int cantidades_dn[16]; int n = 0; int skt_erlang = -1;
-
-            pthread_mutex_lock(&estado->lock);
-            PeticionMulti p = gestor_buscar_peticion(estado, job_id);
-            if (p) {
-                for (int i = 0; i < p->total; i++) {
-                    fds[n] = p->nodos[i].fd_remoto;
-                    strncpy(recursos_dn[n], p->nodos[i].recurso, 31);
-                    recursos_dn[n][31] = '\0';
-                    cantidades_dn[n] = p->nodos[i].cantidad;
-                    n++;
-                }
+    int enviar_granted = 0, skt_erlang = -1;
+    pthread_mutex_lock(&estado->lock);
+    PeticionMulti p = gestor_buscar_peticion(estado, job_id);
+    if (p) {
+        NodoReserva *nr = peticion_buscar_nodo_por_fd(p, cliente->fd);
+        if (nr) {
+            nr->grantado = 1;
+            p->respondidos++;        
+            if (p->respondidos == p->total) {
+                enviar_granted = 1;
                 skt_erlang = p->socket_erlang;
-                gestor_eliminar_peticion(estado, job_id);
-            }
-            pthread_mutex_unlock(&estado->lock);
-
-            // RELEASE a TODOS los nodos (no sabemos cuáles llegaron a GRANTED)
-            for (int i = 0; i < n; i++) {
-                char msj[64];
-                snprintf(msj, sizeof(msj), "RELEASE %d %s %d\n", job_id, recursos_dn[i], cantidades_dn[i]);
-                enviar_mensaje_tcp(fds[i], msj);
-            }
-            if (skt_erlang != -1) {
-                char msj[64];
-                snprintf(msj, sizeof(msj), "JOB_DENIED %d\n", job_id);
-                enviar_mensaje_tcp(skt_erlang, msj);
+                // No destruir: la peticion se necesita hasta JOB_RELEASE.
             }
         }
+    }
+    pthread_mutex_unlock(&estado->lock);
 
-        // CASO 4: Otro agente nos pide que liberemos recursos específicos de un job
-        else if (strcmp(comando, "RELEASE") == 0 && parseados == 4) {
-            // char nombre_res[32]; int cant_res = 0;
-            // if (sscanf(recurso, "%31[^:]:%d", nombre_res, &cant_res) == 2) {
-                printf("[CONTROLADOR] RELEASE recibido para job %d: %s %d\n", job_id, recurso, cant_res);
-                gestor_manejar_release(estado, recurso, job_id, cant_res, callback_granted_red);
-            // } else {
-            //     printf("[CONTROLADOR] RELEASE mal formado: %s\n", msg);
-            // }
-        }
-
-        else {
-            printf("[CONTROLADOR] Comando de red C ignorado o mal formado: %s\n", msg);
-        }
+    if (enviar_granted) {
+        char msj[64];
+        snprintf(msj, sizeof(msj), "JOB_GRANTED %d\n", job_id);
+        enviar_mensaje_tcp(skt_erlang, msj);
     }
 }
 
-// =========================================================================
-// HANDLERS DEL LOOP DE EVENTOS (invocados desde bucle_principal en servidor.c)
-// =========================================================================
+// Un nodo rechazó nuestro RESERVE -> rollback: RELEASE a TODOS los nodos de la
+// peticion (no sabemos cuáles llegaron a GRANTED) y JOB_DENIED a Erlang.
+static void red_denied(int job_id) {
+    printf("[CONTROLADOR] Reserva rechazada por otro nodo para el trabajo %d.\n", job_id);
+
+    int fds[MAX_NODOS_PETICION];
+    char recursos_dn[MAX_NODOS_PETICION][32];
+    int cantidades_dn[MAX_NODOS_PETICION];
+    int n = 0, skt_erlang = -1;
+
+    pthread_mutex_lock(&estado->lock);
+    PeticionMulti p = gestor_buscar_peticion(estado, job_id);
+    if (p) {
+        for (int i = 0; i < p->total; i++) {
+            fds[n] = p->nodos[i].fd_remoto;
+            strncpy(recursos_dn[n], p->nodos[i].recurso, 31);
+            recursos_dn[n][31] = '\0';
+            cantidades_dn[n] = p->nodos[i].cantidad;
+            n++;
+        }
+        skt_erlang = p->socket_erlang;
+        gestor_eliminar_peticion(estado, job_id);
+    }
+    pthread_mutex_unlock(&estado->lock);
+
+    for (int i = 0; i < n; i++) {
+        char msj[64];
+        snprintf(msj, sizeof(msj), "RELEASE %d %s %d\n", job_id, recursos_dn[i], cantidades_dn[i]);
+        enviar_mensaje_tcp(fds[i], msj);
+    }
+    if (skt_erlang != -1) {
+        char msj[64];
+        snprintf(msj, sizeof(msj), "JOB_DENIED %d\n", job_id);
+        enviar_mensaje_tcp(skt_erlang, msj);
+    }
+}
+
+// Un nodo nos pide liberar un recurso local de un job (rollback o fin de trabajo).
+static void red_release(int job_id, char* recurso, int cant_res) {
+    printf("[CONTROLADOR] RELEASE recibido para job %d: %s %d\n", job_id, recurso, cant_res);
+    gestor_manejar_release(estado, recurso, job_id, cant_res, callback_granted_red);
+}
 
 // Callback de timeout: cuando un RESERVE lleva más de TIEMPO_ESPERA_RESERVA
 // encolado sin resolverse, avisamos DENIED al coordinador que lo originó para
@@ -400,8 +407,6 @@ static void notificar_denied_timeout(int job_id, int socket_fd) {
     enviar_mensaje_tcp(socket_fd, msj);
 }
 
-
-
 void timer_deadlock_nodos(void) {
     uint64_t expiraciones;
     read(timer_timeout, &expiraciones, sizeof(expiraciones));
@@ -410,4 +415,3 @@ void timer_deadlock_nodos(void) {
     // Desconectar nodos que no enviaron ANNOUNCE recientemente
     gestor_desconectar_nodos(estado);
 }
-

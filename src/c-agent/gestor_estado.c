@@ -64,12 +64,9 @@ void gestor_recursos_disponibles(EstadoGlobal estado, int *cpu, int *gpu, int *m
     pthread_mutex_unlock(&estado->lock);
 }
 
-//------------------------------------------------------------------------------
-
 int gestor_manejar_reserva(EstadoGlobal estado, char* nombre_recurso, int job_id, 
                             int socket_origen, int cantidad) {
     pthread_mutex_lock(&estado->lock);
-
     int resultado = -1; // DENIED por defecto
     RecursoLocal rec = obtener_recurso(estado, nombre_recurso);
 
@@ -94,25 +91,29 @@ int gestor_manejar_reserva(EstadoGlobal estado, char* nombre_recurso, int job_id
     return resultado;
 }
 
-static void manejar_release_aux(EstadoGlobal estado, char* nombre_recurso, int job_id, int cantidad, void (*avisar_red)(int, int)) {
+static void manejar_release_aux(EstadoGlobal estado, char* nombre_recurso, 
+                        int job_id, int cantidad, void (*avisar_red)(int, int)) {
     RecursoLocal rec = obtener_recurso(estado, nombre_recurso);
     if (!rec || cantidad <= 0) return;
 
     // Liberar solo lo que realmente tiene asignado en el libro contable
-    int liberado = registrar_liberacion(estado->libro_contable, job_id, nombre_recurso, cantidad);
+    int liberado = registrar_liberacion(estado->libro_contable, job_id, 
+                                        nombre_recurso, cantidad);
     if (liberado == 0) return; // Nada que liberar
 
-    // devuelvo los recursos
+    // Devuelvo los recursos
     rec->disponible += liberado;
 
     // Revisamos la cola de este recurso específico y repartimos al siguiente en espera
     while (!cola_es_vacia(rec->pendientes)) {
-        SolicitudPendiente solicitud = (SolicitudPendiente)cola_inicio(rec->pendientes, no_copia_solicitud);
+        SolicitudPendiente solicitud = 
+            (SolicitudPendiente)cola_inicio(rec->pendientes, no_copia_solicitud);
         if (solicitud == NULL) break;
 
         if (rec->disponible >= solicitud->cantidad_pedida) {
             rec->disponible -= solicitud->cantidad_pedida;
-            registrar_asignacion(estado->libro_contable, solicitud->job_id, solicitud->socket_origen, nombre_recurso, solicitud->cantidad_pedida);
+            registrar_asignacion(estado->libro_contable, solicitud->job_id, 
+                solicitud->socket_origen, nombre_recurso, solicitud->cantidad_pedida);
             if (avisar_red) avisar_red(solicitud->job_id, solicitud->socket_origen);
             rec->pendientes = cola_desencolar(rec->pendientes, destruir_solicitud);
         } else {
@@ -121,14 +122,12 @@ static void manejar_release_aux(EstadoGlobal estado, char* nombre_recurso, int j
     }
 }
 
-void gestor_manejar_release(EstadoGlobal estado, char* nombre_recurso, int job_id, int cantidad, void (*avisar_red)(int, int)) {
+void gestor_manejar_release(EstadoGlobal estado, char* nombre_recurso, int job_id, 
+                            int cantidad, void (*avisar_red)(int, int)) {
     pthread_mutex_lock(&estado->lock);
-    
     manejar_release_aux(estado, nombre_recurso, job_id, cantidad, avisar_red);
-    
     pthread_mutex_unlock(&estado->lock);
 }
-
 
 void gestor_liberar_job(EstadoGlobal estado, int job_id, void (*avisar_red)(int, int)) {
     struct jobActivo_ busqueda;
@@ -194,20 +193,25 @@ static EstadoGlobal estado_actual = NULL;
 
 static void callback_tragedia(char* nombre_recurso, int cantidad) {
     // Aca nos saltamos registrar_liberacion porque liberar_recursos_socket 
-    // ya destruyó la ficha entera del cliente desconectado. Solo devolvemos los recursos usados por algún job.
+    // ya destruyó la ficha entera del cliente desconectado. Solo devolvemos 
+    // los recursos usados por algún job.
     RecursoLocal rec = obtener_recurso(estado_actual, nombre_recurso);
     if (!rec) return;
     
     rec->disponible += cantidad;
     
-    while (!cola_es_vacia(rec->pendientes)) { //vaciamos la cola.
-        SolicitudPendiente solicitud = (SolicitudPendiente)cola_inicio(rec->pendientes, no_copia_solicitud);
+    while (!cola_es_vacia(rec->pendientes)) {
+        SolicitudPendiente solicitud = 
+            (SolicitudPendiente)cola_inicio(rec->pendientes, no_copia_solicitud);
+
         if (solicitud == NULL) break;
 
         if (rec->disponible >= solicitud->cantidad_pedida) {
             rec->disponible -= solicitud->cantidad_pedida;
-            registrar_asignacion(estado_actual->libro_contable, solicitud->job_id, solicitud->socket_origen, nombre_recurso, solicitud->cantidad_pedida);
-            if (aviso_red_actual) aviso_red_actual(solicitud->job_id, solicitud->socket_origen);
+            registrar_asignacion(estado_actual->libro_contable, solicitud->job_id, 
+                solicitud->socket_origen, nombre_recurso, solicitud->cantidad_pedida);
+            if (aviso_red_actual) aviso_red_actual(solicitud->job_id, 
+                                                    solicitud->socket_origen);
             rec->pendientes = cola_desencolar(rec->pendientes, destruir_solicitud);
         } else {
             break;
@@ -215,13 +219,12 @@ static void callback_tragedia(char* nombre_recurso, int cantidad) {
     }
 }
 
-void manejar_desconexion_socket(EstadoGlobal estado, int socket_caido, void (*avisar_red)(int, int)) {
+void manejar_desconexion_socket(EstadoGlobal estado, int socket_caido, 
+                                void (*avisar_red)(int, int)) {
     pthread_mutex_lock(&estado->lock);
     estado_actual = estado;
     aviso_red_actual = avisar_red;
-    
     liberar_recursos_socket(estado->libro_contable, socket_caido, callback_tragedia);
-    
     estado_actual = NULL;
     aviso_red_actual = NULL;
     pthread_mutex_unlock(&estado->lock);
@@ -265,10 +268,7 @@ void gestor_procesar_anuncio(EstadoGlobal estado, char* ip, int puerto, int cpu,
 
 char* gestor_get_nodes(EstadoGlobal estado) {
     pthread_mutex_lock(&estado->lock);
-    
-
     char* resultado = get_nodes(estado->registro_nodos);
-    
     pthread_mutex_unlock(&estado->lock);
     return resultado;
 }
