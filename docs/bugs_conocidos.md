@@ -181,26 +181,28 @@ gestor y el modelo (sin sockets), así que nada de lo de abajo se ejercita ahí.
 
 ## `Sockets.c` / `Sockets.h`
 
-### 5. `mk_udp_lsock` usa `SO_REUSEADDR` donde el comentario pide `SO_REUSEPORT`
+### 5. `mk_udp_lsock` usaba `SO_REUSEADDR` en vez de `SO_REUSEPORT` — ya resuelto
 
-**Dónde:** `Sockets.c`, dentro de `mk_udp_lsock` (el `setsockopt` del socket UDP);
-marcado con un comentario `// BUG:` en el lugar exacto.
+**Dónde:** `Sockets.c`, dentro de `mk_udp_lsock` (el `setsockopt` del socket UDP).
 
-**Qué pasa:** el comentario del propio código declara la intención —"que varios
-nodos en la misma PC de pruebas escuchen el mismo broadcast"— que es
-exactamente el caso de uso de `SO_REUSEPORT`. Pero el código activa
-`SO_REUSEADDR`.
+**Qué pasaba:** la intención era que varios agentes en la **misma** máquina
+pudieran bindear el mismo puerto UDP (`INADDR_ANY`) y todos recibieran el
+broadcast de autodescubrimiento, pero eso requiere `SO_REUSEPORT`. El código
+activaba `SO_REUSEADDR`.
 
-**Por qué importa:** en Linux, para tener **varios sockets bindeados al mismo
-puerto UDP con `INADDR_ANY`**, `SO_REUSEADDR` no alcanza: el segundo `bind()`
-falla con `EADDRINUSE`. Como el bind está envuelto en `quit()`, el **segundo
-agente lanzado en la misma máquina aborta al arrancar**. Es decir, correr dos o
-más agentes en un mismo host (el escenario típico de prueba de
-autodescubrimiento por UDP) no funciona. No se dispara en
+**Por qué importaba:** en Linux, para tener **varios sockets bindeados al mismo
+puerto UDP con `INADDR_ANY`**, `SO_REUSEADDR` no alcanza (esa excepción solo
+aplica a multicast): el segundo `bind()` falla con `EADDRINUSE`. Como el bind
+está envuelto en `quit()`, el **segundo agente lanzado en la misma máquina
+abortaba al arrancar**. Bug latente: con un solo agente por máquina (el
+escenario del enunciado) nunca se disparaba. No se ejercita en
 `test_deadlock_simple.sh` porque ese test nunca crea sockets.
 
-**Fix sugerido:** usar `SO_REUSEPORT` (o `SO_REUSEADDR | SO_REUSEPORT`) en ese
-`setsockopt`. No se aplicó todavía por consigna (solo documentar).
+**Fix aplicado:** el `setsockopt` del socket UDP pasó a usar `SO_REUSEPORT`.
+Para el caso de un solo binder el comportamiento es idéntico (`SO_REUSEADDR` en
+UDP no aportaba nada relevante: su semántica de rebind rápido es de `TIME_WAIT`,
+un estado de TCP que UDP no tiene), y de paso queda habilitado el multi-agente
+en el mismo host.
 
 ### Robustez menor (no rompen el flujo feliz)
 
@@ -278,3 +280,45 @@ Sin bugs de comportamiento. Observaciones:
 - **Pregunta respondida (`estado` == NULL al llegar un TCP?)**: no. `estado` se
   inicializa en `main` *antes* de crear el epoll, registrar sockets y lanzar los
   hilos, así que cuando cualquier worker procesa un mensaje el estado ya existe.
+
+---
+
+## `servidor.c` — `bucle_principal` — ya resuelto
+
+### 6. Dangling-else en el branch UDP: el agente moría al recibir el primer `ANNOUNCE`
+
+**Dónde:** `servidor.c`, cadena de despacho de eventos dentro de `bucle_principal`.
+
+**Qué pasaba:** el branch de UDP tenía un `if` sin llaves seguido de más `else if`:
+
+```c
+else if (fd_listo == usock_udp)
+    if (parseo_anuncio() == 0)
+        continue;
+else if (fd_listo == timer_anuncios_fd)   // se ataba al if interno, no al usock_udp
+    anunciar_recursos();
+```
+
+Por la regla del dangling-else de C, los `else if` de los timers y el `else`
+final del cliente TCP quedaban **anidados dentro del branch de `usock_udp`**, no
+en la cadena externa. Efecto real: la cadena externa solo tenía dos ramas
+(sockets de escucha y UDP), y todo lo demás colgaba del UDP. Generaba además el
+warning `-Wdangling-else`.
+
+**Por qué importaba:** al llegar un `ANNOUNCE`, `parseo_anuncio()` lo procesaba y
+retornaba `1`; como no era `0`, el flujo caía por los `else if` (ambos falsos, el
+fd era el UDP) hasta el `else` final, que trataba al socket UDP como un cliente
+TCP: llamaba `atender_cliente_tcp` sobre él y luego `modificar_cliente_en_epoll`
+(`EPOLL_CTL_MOD`) sobre `usock_udp`. Pero ese socket se registró con
+`EPOLLEXCLUSIVE` en `main`, y Linux devuelve `EINVAL` ante un `EPOLL_CTL_MOD`
+sobre un fd agregado con `EPOLLEXCLUSIVE`. Resultado: `perror("Error al
+modificar cliente en el epoll: Invalid argument")` + `exit(EXIT_FAILURE)`. **El
+primer `ANNOUNCE` recibido mataba al agente**, por lo que nunca llegaba a
+conectarse con otros nodos. Como daño colateral (opacado por el crash), los
+eventos de los timers y de los clientes TCP reales tampoco matcheaban ninguna
+rama externa, así que ni los `RESERVE`/`GRANTED`/mensajes de Erlang se habrían
+procesado.
+
+**Fix aplicado:** se quitó el `if (parseo_anuncio() == 0) continue;` y el branch
+UDP quedó como `else if (fd_listo == usock_udp) parseo_anuncio();`, dejando la
+cadena `else if` de timers y cliente TCP plana al nivel externo.

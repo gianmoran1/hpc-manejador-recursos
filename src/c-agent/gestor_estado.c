@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
+#include <assert.h>
 
 // Callbacks para la Cola de pendientes de cada RecursoLocal
 
@@ -32,6 +33,7 @@ static RecursoLocal obtener_recurso(EstadoGlobal estado, char* nombre) {
 
 EstadoGlobal estado_crear(int cap_cpu, int cap_gpu, int cap_mem) {
     EstadoGlobal e = malloc(sizeof(struct estadoGlobal_));
+    assert(e);
     e->cpu = recurso_crear("cpu", cap_cpu);
     e->gpu = recurso_crear("gpu", cap_gpu);
     e->mem = recurso_crear("mem", cap_mem);
@@ -160,7 +162,6 @@ void gestor_liberar_job(EstadoGlobal estado, int job_id, void (*avisar_red)(int,
 void gestor_expirar_pedidos(EstadoGlobal estado, void (*avisar_timeout)(int, int)) {
     pthread_mutex_lock(&estado->lock);
     time_t ahora = time(NULL);
-    // Un simple arreglo nos permite limpiar los 3 recursos
     RecursoLocal recursos[] = {estado->cpu, estado->gpu, estado->mem};
 
     for (int i = 0; i < 3; i++) {
@@ -259,6 +260,8 @@ void gestor_procesar_anuncio(EstadoGlobal estado, char* ip, int puerto, int cpu,
     procesar_anuncio(estado->registro_nodos, ip, puerto, cpu, gpu, mem);
     pthread_mutex_unlock(&estado->lock);
 }
+
+// -----------------------------------------------------------------------------
 
 char* gestor_get_nodes(EstadoGlobal estado) {
     pthread_mutex_lock(&estado->lock);

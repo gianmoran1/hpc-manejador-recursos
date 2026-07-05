@@ -31,11 +31,6 @@ typedef struct {
  */
 ClienteConectado* crear_cliente_conectado(int fd, int es_erlang);
 
-/*
- * Extrae del buffer del cliente todos los mensajes completos (terminados en
- * '\n') y los despacha al controlador según su origen (Erlang o red C).
- * Tras procesar cada mensaje desplaza el remanente al principio del buffer.
- */
-void procesar_mensajes_en_buffer(ClienteConectado *cliente);
+void destruir_cliente(ClienteConectado* cliente);
 
 #endif /* __CLIENTE_H__ */

@@ -8,6 +8,7 @@
  */
 Cola cola_crear(){
   Cola cola = malloc(sizeof(_Cola));
+  assert(cola);
   cola->primero = NULL;
   cola->ultimo = NULL;
   return cola;

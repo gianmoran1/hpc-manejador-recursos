@@ -16,7 +16,7 @@
 #include "red/sockets.h"
 #include "red/cliente.h"
 
-// Estado global y descriptores del servidor.
+// Descriptores del servidor.
 int epoll_fd;
 int lsock_publico;
 int lsock_local;
@@ -25,21 +25,8 @@ int erlangSocket = -1;
 int timer_anuncios_fd;
 int timer_timeout;
 char mi_ip_publica[16];
-EstadoGlobal estado = NULL;
 
-void agregar_cliente_en_epoll(ClienteConectado *cliente, int flags) {
-    struct epoll_event ev;
-    ev.events = flags;
-    ev.data.ptr = cliente;
-
-    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cliente->fd, &ev) == -1) {
-        perror("Error al agregar cliente al epoll");
-        close(cliente->fd);
-        exit(EXIT_FAILURE);
-    }
-}
-
-void modificar_cliente_en_epoll(ClienteConectado *cliente, int flags) {
+static void servidor_modificar_cliente_en_epoll(ClienteConectado *cliente, int flags) {
     struct epoll_event ev;
     ev.events = flags;
     ev.data.ptr = cliente;
@@ -51,7 +38,7 @@ void modificar_cliente_en_epoll(ClienteConectado *cliente, int flags) {
     }
 }
 
-void aceptar_cliente(int fd_listo) {
+static void servidor_aceptar_cliente(int fd_listo) {
     struct sockaddr_in cliente_addr;
     socklen_t cliente_len = sizeof(cliente_addr);
 
@@ -61,21 +48,45 @@ void aceptar_cliente(int fd_listo) {
         // Si hubo un error falso por ser no-bloqueante, lo ignoramos
         return;
     }
+
     // Convierto el nuevo socket a no bloqueante
     set_nonblocking(conn_sock);
 
     ClienteConectado *clienteNuevo =
         crear_cliente_conectado(conn_sock, (fd_listo == lsock_local) ? 1 : 0);
-    agregar_cliente_en_epoll(clienteNuevo, EPOLLIN | EPOLLONESHOT);
+    servidor_agregar_cliente_en_epoll(clienteNuevo, EPOLLIN | EPOLLONESHOT);
 
     if (fd_listo == lsock_local) {
         erlangSocket = conn_sock;
-        printf("¡Nueva conexión local aceptada para Erlang! (FD asignado: %d)\n", conn_sock);
+        printf("[CONEXIONES] Nueva conexión local aceptada para Erlang (FD asignado: %d)\n", conn_sock);
     } else
-        printf("¡Nueva conexión de red aceptada! (FD asignado: %d)\n", conn_sock);
+        printf("[CONEXIONES] Nueva conexión de red aceptada (FD asignado: %d)\n", conn_sock);
 }
 
-void* bucle_principal(void* args) {
+static void servidor_gestion_anuncio_recibido() {
+    char buffer_udp[1024];
+    int valido = atender_cliente_udp(usock_udp, buffer_udp, sizeof(buffer_udp));
+    if (!valido) 
+        return;
+    printf("[CONEXIONES] ANNOUNCE UDP recibido: %s\n", buffer_udp);
+    controlador_anuncio_recibido(buffer_udp);
+}
+
+static void servidor_gestion_cliente(ClienteConectado* cliente) {
+    int ret = atender_cliente_tcp(cliente);
+    if (ret == 0) { // El socket se rompió o desconectó.
+        printf("[CONEXIONES] Nodo de red (FD %d) desconectado.\n", cliente->fd);
+        controlador_desconexion_cliente(cliente->fd);
+        destruir_cliente(cliente);
+    }
+    else {
+        printf("[CONEXIONES] Mensaje recibido de cliente (FD %d).\n", cliente->fd);
+        controlador_mensaje_cliente(cliente);
+        servidor_modificar_cliente_en_epoll(cliente, EPOLLIN | EPOLLONESHOT);
+    }
+}
+
+void* servidor_bucle_principal(void* args) {
     (void)args;
     struct epoll_event eventos[MAX_EVENTS];
 
@@ -87,42 +98,36 @@ void* bucle_principal(void* args) {
             exit(EXIT_FAILURE);
         }
 
-        for (int n = 0; n < nfds; ++n) {
+        for (int n = 0; n < nfds; n++) {
             ClienteConectado *entidad = (ClienteConectado *) eventos[n].data.ptr;
             int fd_listo = entidad->fd;
 
             // Socket de escucha: hay una nueva conexión queriendo entrar.
             if ((fd_listo == lsock_publico) || (fd_listo == lsock_local))
-                aceptar_cliente(fd_listo);
-
+                servidor_aceptar_cliente(fd_listo);
             // UDP: algún nodo se está anunciando con un ANNOUNCE.
             else if (fd_listo == usock_udp)
-                parseo_anuncio();
+                servidor_gestion_anuncio_recibido();
             else if (fd_listo == timer_anuncios_fd)
-                anunciar_recursos();
+                controlador_anuncio_recursos();
             else if (fd_listo == timer_timeout)
                 timer_deadlock_nodos();
-
             // Cliente ya conectado mandando texto (RESERVE, JOB_REQUEST, etc).
-            else {
-                ClienteConectado *cliente = (ClienteConectado *) eventos[n].data.ptr;
-                int ret = atender_cliente_tcp(cliente);
-                if (ret == 0) {
-                    // El socket se rompió o desconectó.
-                    printf("Nodo de red (FD %d) desconectado. Liberando sus recursos...\n", cliente->fd);
-                    manejar_desconexion_socket(estado, cliente->fd, callback_granted_red);
-                    // Evitar que nodo_destruir intente close+free de un ClienteConectado
-                    // que ya vamos a liberar nosotros justo debajo.
-                    nodo_limpiar_conexion_por_fd(cliente->fd, estado->registro_nodos);
-                    close(cliente->fd);
-                    free(cliente);
-                }
-                else {
-                    procesar_mensajes_en_buffer(cliente);
-                    modificar_cliente_en_epoll(cliente, EPOLLIN | EPOLLONESHOT);
-                }
-            }
+            else // No es EPOLLEXCLUSIVE, race condition posible.
+                servidor_gestion_cliente((ClienteConectado *) eventos[n].data.ptr);
         }
     }
     return NULL;
+}
+
+void servidor_agregar_cliente_en_epoll(ClienteConectado *cliente, int flags) {
+    struct epoll_event ev;
+    ev.events = flags;
+    ev.data.ptr = cliente;
+
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cliente->fd, &ev) == -1) {
+        perror("Error al agregar cliente al epoll");
+        close(cliente->fd);
+        exit(EXIT_FAILURE);
+    }
 }

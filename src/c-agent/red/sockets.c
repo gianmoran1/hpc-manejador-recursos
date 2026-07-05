@@ -86,14 +86,7 @@ int mk_udp_lsock(int port) {
     if (usock < 0) quit("socket UDP");
 
     int yes = 1;
-    // BUG: el comentario dice SO_REUSEPORT (y esa es la intención: que varios
-    // agentes en la MISMA máquina puedan bindear el mismo puerto UDP y todos
-    // reciban el broadcast de autodescubrimiento), pero el código activa
-    // SO_REUSEADDR. En Linux, para múltiples sockets bindeados al mismo puerto
-    // con INADDR_ANY, SO_REUSEADDR NO alcanza: el segundo bind() falla con
-    // EADDRINUSE y quit() aborta el segundo agente. Debería ser SO_REUSEPORT.
-    // (No se toca acá: documentado en docs/bugs_conocidos.md.)
-    if (setsockopt(usock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes) < 0)
+    if (setsockopt(usock, SOL_SOCKET, SO_REUSEPORT, &yes, sizeof yes) < 0)
         quit("setsockopt UDP");
 
     int broadcast_enable = 1;
@@ -190,7 +183,7 @@ int atender_cliente_tcp(ClienteConectado *cliente) {
         int espacio_disponible = sizeof(cliente->buffer) - cliente->bytes_leidos - 1;
 
         if (espacio_disponible <= 0) {
-            printf("[FD %d] Error: Mensaje demasiado largo sin '\\n'. Desconectando por seguridad.\n", cliente->fd);
+            perror("Error mensaje demasiado largo");
             return 0;
         }
 

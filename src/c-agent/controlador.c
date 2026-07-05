@@ -11,6 +11,87 @@
 #include "gestor_estado.h" // implementacion del gestor de recursos
 #include "modelo/transacciones.h" // PeticionMulti para rollback de JOB_REQUEST
 
+EstadoGlobal estado = NULL;
+
+void controlador_anuncio_recibido(char* buffer_udp) {
+    char ip_node[50], cmd[32];
+    int puerto_node = 0, cpu = 0, gpu = 0, mem = 0;
+    int n = sscanf(buffer_udp, "%49s %31s %d", ip_node, cmd, &puerto_node);
+    if (n == 3 && strcmp(cmd, "ANNOUNCE") == 0) {
+        // Avanzar el cursor hasta los tokens de recursos
+        const char *ptr = buffer_udp;
+        for (int i = 0; i < 3; i++) {
+            while (*ptr && *ptr != ' ') ptr++;
+            while (*ptr == ' ') ptr++;
+        }
+        char tok[64];
+        while (sscanf(ptr, "%63s", tok) == 1) {
+            char res[16]; int val;
+            if (sscanf(tok, "%15[^:]:%d", res, &val) == 2) {
+                if      (strcmp(res, "cpu") == 0) cpu = val;
+                else if (strcmp(res, "gpu") == 0) gpu = val;
+                else if (strcmp(res, "mem") == 0) mem = val;
+            }
+            while (*ptr && *ptr != ' ') ptr++;
+            while (*ptr == ' ') ptr++;
+        }
+        gestor_procesar_anuncio(estado, ip_node, puerto_node, cpu, gpu, mem);
+    }
+}
+
+void controlador_anuncio_recursos() {
+    uint64_t _expiraciones;
+    read(timer_anuncios_fd, &_expiraciones, sizeof(_expiraciones));
+
+    int disp_cpu, disp_gpu, disp_mem;
+    gestor_recursos_disponibles(estado, &disp_cpu, &disp_gpu, &disp_mem);
+
+    char msj[TAM_BUFFER_ANUNCIO];
+    snprintf(msj, sizeof(msj), "ANNOUNCE %d cpu:%d gpu:%d mem:%d\n",
+            PUERTO_TCP, disp_cpu, disp_gpu, disp_mem);
+    enviar_mensaje_udp(usock_udp, IP_BROADCAST, PUERTO_UDP, msj);
+}
+
+
+
+
+
+void controlador_desconexion_cliente(int cliente_fd) {
+    manejar_desconexion_socket(estado, cliente_fd, callback_granted_red);
+    // Evitar que nodo_destruir intente close+free de un ClienteConectado
+    // que ya vamos a liberar nosotros justo debajo.
+    nodo_limpiar_conexion_por_fd(cliente_fd, estado->registro_nodos);
+}
+
+void controlador_mensaje_cliente(ClienteConectado *cliente) {
+    char *salto_linea;
+
+    while ((salto_linea = strchr(cliente->buffer, '\n')) != NULL) {
+        // Cortamos el mensaje limpio hasta el '\n'
+        int longitud_mensaje = salto_linea - cliente->buffer;
+        char mensaje_limpio[TAM_BUFFER_MENSAJE];
+        strncpy(mensaje_limpio, cliente->buffer, longitud_mensaje);
+        mensaje_limpio[longitud_mensaje] = '\0';
+
+        if (cliente->es_erlang)
+            procesar_mensaje_erlang(cliente, mensaje_limpio);
+        else
+            procesar_mensaje_red_c(cliente, mensaje_limpio);
+
+        // Movemos lo que sobró al principio del buffer
+        int bytes_restantes = cliente->bytes_leidos - (longitud_mensaje + 1);
+        memmove(cliente->buffer, salto_linea + 1, bytes_restantes);
+        cliente->bytes_leidos = bytes_restantes;
+        cliente->buffer[cliente->bytes_leidos] = '\0';
+    }
+}
+
+
+
+
+
+
+
 // Callback C-C: notifica a un nodo coordinador que su RESERVE encolado fue concedido.
 // Usa "GRANTED" (protocolo C-C), no "JOB_GRANTED" (que es solo para Erlang).
 void callback_granted_red(int job_id, int socket_fd) {
@@ -131,7 +212,7 @@ void procesar_mensaje_erlang(ClienteConectado *cliente, char* msg) {
                     fd_destino = conectar_a_nodo(ip_destino, puerto_destino);
                     if (fd_destino != -1) {
                         ClienteConectado *nueva = crear_cliente_conectado(fd_destino, 0);
-                        agregar_cliente_en_epoll(nueva, EPOLLIN | EPOLLONESHOT);
+                        servidor_agregar_cliente_en_epoll(nueva, EPOLLIN | EPOLLONESHOT);
                         nodo_registrar_conexion(ip_destino, puerto_destino, nueva,
                                                 estado->registro_nodos);
                     }
@@ -319,51 +400,7 @@ static void notificar_denied_timeout(int job_id, int socket_fd) {
     enviar_mensaje_tcp(socket_fd, msj);
 }
 
-int parseo_anuncio(void) {
-    char buffer_udp[1024];
-    int valido = atender_cliente_udp(usock_udp, buffer_udp, sizeof(buffer_udp));
-    if (!valido) return 0;
 
-    printf("¡ANNOUNCE UDP recibido: %s!\n", buffer_udp);
-    char ip_node[50], cmd[32];
-    int puerto_node = 0, cpu = 0, gpu = 0, mem = 0;
-    int n = sscanf(buffer_udp, "%49s %31s %d", ip_node, cmd, &puerto_node);
-    if (n == 3 && strcmp(cmd, "ANNOUNCE") == 0) {
-        // Avanzar el cursor hasta los tokens de recursos
-        const char *ptr = buffer_udp;
-        for (int i = 0; i < 3; i++) {
-            while (*ptr && *ptr != ' ') ptr++;
-            while (*ptr == ' ') ptr++;
-        }
-        char tok[64];
-        while (sscanf(ptr, "%63s", tok) == 1) {
-            char res[16]; int val;
-            if (sscanf(tok, "%15[^:]:%d", res, &val) == 2) {
-                if      (strcmp(res, "cpu") == 0) cpu = val;
-                else if (strcmp(res, "gpu") == 0) gpu = val;
-                else if (strcmp(res, "mem") == 0) mem = val;
-            }
-            while (*ptr && *ptr != ' ') ptr++;
-            while (*ptr == ' ') ptr++;
-        }
-        gestor_procesar_anuncio(estado, ip_node, puerto_node, cpu, gpu, mem);
-        return 1;
-    }
-    return 0;
-}
-
-void anunciar_recursos(void) {
-    uint64_t expiraciones;
-    read(timer_anuncios_fd, &expiraciones, sizeof(expiraciones));
-
-    int disp_cpu, disp_gpu, disp_mem;
-    gestor_recursos_disponibles(estado, &disp_cpu, &disp_gpu, &disp_mem);
-
-    char msj[TAM_BUFFER_ANUNCIO];
-    snprintf(msj, sizeof(msj), "ANNOUNCE %d cpu:%d gpu:%d mem:%d\n",
-             PUERTO_TCP, disp_cpu, disp_gpu, disp_mem);
-    enviar_mensaje_udp(usock_udp, IP_BROADCAST, PUERTO_UDP, msj);
-}
 
 void timer_deadlock_nodos(void) {
     uint64_t expiraciones;
