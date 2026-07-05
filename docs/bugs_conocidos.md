@@ -15,73 +15,30 @@ límites que no se disparan con el flujo feliz.
 
 ## `modelo/nodos.c` / `nodos.h`
 
-### 1. `nodo_limpiar_conexion_por_fd` borra el nodo entero en vez de solo desvincular la conexión
+### Concurrencia del registro de nodos — resuelto
 
-**Dónde:** `nodos.c`, dentro de `nodo_limpiar_conexion_por_fd` (línea ~238 en
-adelante); documentado también en `nodos.h` junto a la declaración de la
-función.
+Los #1 (borrado indebido del nodo al limpiar la conexión), #2 (use-after-free de
+la conexión cacheada desde el timer) y la data race del registro en
+`erlang_job_request` se resolvieron con un **modelo de ownership**: el
+`ClienteConectado` es propiedad del loop de epoll; el registro guarda solo una
+referencia débil (`nodo->conexion`) que nunca cierra ni libera.
+`nodo_limpiar_conexion_por_fd` solo pone `conexion = NULL`; `nodo_destruir` ya no
+toca la conexión. Todo acceso a la `TablaNodos` desde el controlador pasa por
+facades del gestor bajo `estado->lock` (`gestor_obtener_destino`,
+`gestor_registrar_conexion`, `gestor_limpiar_conexion_por_fd`), sin retener
+punteros a `Nodo`/`ClienteConectado` fuera del lock.
 
-**Qué pasa:** el nombre de la función y su propio comentario en `nodos.h`
-prometen *"pone a NULL el campo conexion... no libera memoria (el caller lo
-hace)"*. La implementación real, en cambio, llama a `tablahash_eliminar`
-sobre el nodo completo — es decir, **borra el `Nodo` entero del registro**
-(ip, puerto, cpu/gpu/mem conocidos), no solo la conexión TCP cacheada.
+**Residuales aceptables (a tener presente):**
 
-**Por qué importa:** `docs/arquitectura.md` documenta que un nodo remoto solo
-se elimina del registro tras 15 segundos sin `ANNOUNCE`. Con este bug, un
-nodo perfectamente vivo desaparece de `GET_NODES` apenas se cae **una
-conexión TCP saliente cacheada** hacia él (por ejemplo, por un hipo de red
-momentáneo), mucho antes de que se cumplan esos 15 segundos. El scheduler de
-Erlang puede perder de vista temporalmente un nodo con recursos disponibles.
-
-**Fix sugerido:** no llamar a `tablahash_eliminar` acá; solo dejar
-`conexion = NULL` en el `Nodo` y dejar que sea `desconectar()` (por timeout
-de 15s) o un futuro `ANNOUNCE` los que decidan si el nodo sigue vivo.
-
----
-
-### 2. Race de concurrencia: `nodo_destruir` puede cerrar/liberar una conexión que otro hilo está usando
-
-**Dónde:** `nodos.c`, función estática `nodo_destruir` (línea ~12), llamada
-desde `desconectar()` cada vez que expira el timer de 15s.
-
-**Qué pasa:** `nodo_destruir` hace `close(nodo->conexion->fd)` y
-`free(nodo->conexion)`. Ese mismo puntero `ClienteConectado*` es el que
-`servidor.c` guarda en `eventos[n].data.ptr` dentro del epoll compartido por
-los 4 hilos worker, y el despacho de eventos (`bucle_principal`) lee
-`entidad->fd` **sin tomar `estado->lock`**.
-
-**Por qué importa:** si `desconectar()` corre (con el lock tomado) justo
-cuando otro hilo despierta con un evento pendiente para ese mismo fd (por
-ejemplo, un `GRANTED`/`DENIED` que llega justo antes de que el nodo expire
-por silencio), ese otro hilo termina leyendo memoria ya liberada
-(use-after-free). Peor: el fd puede haber sido reciclado por el kernel para
-un socket totalmente distinto entre el `close()` de acá y el `recv()` del
-otro hilo, haciendo que el mensaje se procese sobre la conexión equivocada.
-
-**Nota:** este bug y el anterior comparten la misma raíz — nada coordina
-"tirar abajo una conexión cacheada en `TablaNodos`" con "el epoll la está
-usando ahora mismo desde otro hilo". Conviene pensarlos y resolverlos juntos.
-
-**Relacionado — misma raíz, en `controlador.c` `erlang_job_request`:** el
-chequeo de `nodo == NULL` ya se agregó, pero **el acceso al registro de nodos en
-ese camino no está protegido por `estado->lock`**:
-
-- `gestor_buscar_nodo_por_ip` toma el lock, busca y lo **suelta antes de
-  devolver** el puntero `Nodo`. Después `nodo->puerto` se derefencia sin lock: si
-  el timer de mantenimiento (`gestor_desconectar_nodos`) libera ese nodo en el
-  medio → **use-after-free**.
-- `nodo_obtener_conexion` y `nodo_registrar_conexion` (en `nodos.c`) **no toman
-  ningún lock** (no hay un solo `pthread_mutex` en ese archivo) y tocan
-  `registro_nodos` directamente, mientras el hilo del `ANNOUNCE`
-  (`gestor_procesar_anuncio`) y el timer lo modifican bajo `estado->lock` →
-  **data race sobre la `TablaNodos`** (corrupción del hash, lecturas rotas).
-- El `ClienteConectado*` que devuelve `nodo_obtener_conexion` puede quedar
-  liberado por otro hilo antes de usar su `fd` (use-after-free, familia de #2).
-
-**Fix (junto con #1/#2):** que toda la interacción con `registro_nodos` en
-`erlang_job_request` pase por la fachada del gestor bajo `estado->lock`, y no
-retener punteros a `Nodo`/`ClienteConectado` a través de fronteras de lock.
+- Si el timer saca un nodo que todavía tenía una conexión viva, esa conexión
+  queda **huérfana** (sigue en el epoll y funciona; se libera cuando se cierra).
+  Un `ANNOUNCE` posterior de ese nodo abre una conexión nueva → puede haber dos
+  conexiones al mismo nodo hasta que la vieja se cierre. Leak acotado.
+- En `erlang_job_request`, el `fd` de la conexión cacheada se lee bajo lock pero
+  el `send` del `RESERVE` se hace fuera del lock. Si otro hilo cierra esa
+  conexión en esa ventana mínima, el `send` falla (manejable) o —muy improbable—
+  va a un fd reciclado. El fix robusto sería refcounting de la conexión; se dejó
+  así por costo/beneficio.
 
 ### Código sin uso
 

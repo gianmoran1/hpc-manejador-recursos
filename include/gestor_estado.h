@@ -67,7 +67,17 @@ PeticionMulti gestor_buscar_peticion(EstadoGlobal estado, int job_id);
 /* Elimina y libera la peticion con ese job_id. LLAMAR CON estado->lock YA TOMADO. */
 void gestor_eliminar_peticion(EstadoGlobal estado, int job_id);
 
-Nodo gestor_buscar_nodo_por_ip(char* ip, EstadoGlobal estado);
+/* ── Conexiones cacheadas a nodos remotos (todas toman el lock) ──────────── */
+
+/* Lookup atómico: escribe el puerto del nodo y el fd de su conexión cacheada
+ * (o -1 si no tiene) en los punteros de salida. Devuelve 1 si el nodo existe. */
+int gestor_obtener_destino(EstadoGlobal estado, char* ip, int* puerto_out, int* fd_cacheado_out);
+
+/* Cachea una conexión saliente ya establecida para el nodo (ip, puerto). */
+void gestor_registrar_conexion(EstadoGlobal estado, char* ip, int puerto, ClienteConectado* cliente);
+
+/* Desvincula (conexion = NULL) la conexión cacheada que tenga ese fd. */
+void gestor_limpiar_conexion_por_fd(EstadoGlobal estado, int fd);
 
 
 #endif /* __GESTOR_ESTADO_H__ */

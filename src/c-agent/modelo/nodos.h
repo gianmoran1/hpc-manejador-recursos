@@ -54,13 +54,10 @@ void destruir_tabla_nodos(TablaNodos);
 
 /**
  * Elimina los nodos que no han enviado un ANNOUNCE en los últimos 15
- * segundos. Si el nodo eliminado tenía una conexión TCP cacheada
- * (nodo->conexion), esta se cierra y libera como parte del destructor
- * (ver nodo_destruir en el .c).
- * ADVERTENCIA DE CONCURRENCIA: cerrar y liberar esa conexión acá compite
- * con el loop de epoll (Agente.c), que puede estar despachando en otro
- * hilo un evento para ese mismo fd/ClienteConectado en simultáneo. Ver
- * comentario junto a nodo_destruir en nodos.c.
+ * segundos. NO cierra ni libera la conexión TCP cacheada del nodo
+ * (nodo->conexion): esa es propiedad del loop de epoll. Si el nodo se saca
+ * con una conexión viva, esta queda huérfana y se libera cuando se cierra.
+ * Debe llamarse con estado->lock tomado (lo hace gestor_desconectar_nodos).
  */
 void desconectar(TablaNodos tabla_nodos);
 
@@ -89,25 +86,16 @@ Nodo buscar_nodo_por_ip(char* ip, TablaNodos tabla_nodos);
 void procesar_anuncio(TablaNodos tabla_nodos, char* ip, int puerto, int cpu, int gpu, int mem);
 
 /**
- * Devuelve la conexión TCP saliente cacheada para el nodo (ip, puerto),
- * o NULL si no existe el nodo o no tiene conexión cacheada todavía.
- */
-ClienteConectado* nodo_obtener_conexion(char* ip, int puerto, TablaNodos tabla_nodos);
-
-/**
  * Asocia una conexión ya establecida al nodo (ip, puerto), para poder
- * reutilizarla en el próximo RESERVE hacia ese mismo nodo.
- * No-op si el nodo no está en la tabla.
+ * reutilizarla en el próximo RESERVE hacia ese mismo nodo. No-op si el nodo
+ * no está en la tabla. Debe llamarse bajo lock (usar gestor_registrar_conexion).
  */
 void nodo_registrar_conexion(char* ip, int puerto, ClienteConectado* cliente, TablaNodos tabla_nodos);
 
 /**
- * Busca, por fd, el nodo que tiene esa conexión cacheada.
- * BUG: el nombre y este comentario prometen solo poner conexion = NULL
- * (dejando la memoria a cargo del caller), pero la implementación actual
- * además elimina el Nodo entero de la tabla (tablahash_eliminar), perdiendo
- * su ip/cpu/gpu/mem conocidos antes de que se cumplan los 15s de silencio
- * documentados como único criterio de desconexión. Ver nodos.c.
+ * Busca por fd el nodo que tiene esa conexión cacheada y le pone
+ * conexion = NULL. NO elimina el nodo del registro ni libera el
+ * ClienteConectado. Debe llamarse bajo lock (usar gestor_limpiar_conexion_por_fd).
  */
 void nodo_limpiar_conexion_por_fd(int fd, TablaNodos tabla_nodos);
 

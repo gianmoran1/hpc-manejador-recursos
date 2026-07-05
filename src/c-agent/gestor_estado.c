@@ -280,9 +280,31 @@ void gestor_desconectar_nodos(EstadoGlobal estado) {
     pthread_mutex_unlock(&estado->lock);
 }
 
-Nodo gestor_buscar_nodo_por_ip(char* ip, EstadoGlobal estado){ 
+// Lookup atómico bajo lock: escribe en *puerto_out el puerto del nodo y en
+// *fd_cacheado_out el fd de su conexión cacheada (o -1 si no tiene). Devuelve 1
+// si el nodo está en el registro, 0 si no. No deja escapar ningún puntero a
+// Nodo/ClienteConectado fuera del lock (evita el use-after-free si el timer
+// libera el nodo).
+int gestor_obtener_destino(EstadoGlobal estado, char* ip, int* puerto_out, int* fd_cacheado_out) {
     pthread_mutex_lock(&estado->lock);
-    Nodo nodoBuscado = buscar_nodo_por_ip(ip, estado->registro_nodos);
+    Nodo n = buscar_nodo_por_ip(ip, estado->registro_nodos);
+    int encontrado = (n != NULL);
+    if (encontrado) {
+        *puerto_out = n->puerto;
+        *fd_cacheado_out = (n->conexion != NULL) ? n->conexion->fd : -1;
+    }
     pthread_mutex_unlock(&estado->lock);
-    return nodoBuscado;
+    return encontrado;
+}
+
+void gestor_registrar_conexion(EstadoGlobal estado, char* ip, int puerto, ClienteConectado* cliente) {
+    pthread_mutex_lock(&estado->lock);
+    nodo_registrar_conexion(ip, puerto, cliente, estado->registro_nodos);
+    pthread_mutex_unlock(&estado->lock);
+}
+
+void gestor_limpiar_conexion_por_fd(EstadoGlobal estado, int fd) {
+    pthread_mutex_lock(&estado->lock);
+    nodo_limpiar_conexion_por_fd(fd, estado->registro_nodos);
+    pthread_mutex_unlock(&estado->lock);
 }

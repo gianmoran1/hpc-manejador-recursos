@@ -73,7 +73,7 @@ void controlador_anuncio_recursos() {
 
 void controlador_desconexion_cliente(int cliente_fd) {
     manejar_desconexion_socket(estado, cliente_fd, callback_granted_red);
-    nodo_limpiar_conexion_por_fd(cliente_fd, estado->registro_nodos);
+    gestor_limpiar_conexion_por_fd(estado, cliente_fd);
 }
 
 // Callback C-C: notifica a un nodo coordinador que su RESERVE encolado fue concedido.
@@ -185,31 +185,25 @@ static void erlang_job_request(ClienteConectado *cliente, int job_id, char* msg)
             return;
         }
 
-        Nodo nodo = gestor_buscar_nodo_por_ip(ip_destino, estado);
-        if (nodo == NULL) {
+        // Lookup atómico bajo lock: puerto del nodo + fd de su conexión cacheada
+        // (-1 si no hay). No se retiene ningún puntero a Nodo/conexión fuera del lock.
+        int puerto_destino, fd_destino;
+        if (!gestor_obtener_destino(estado, ip_destino, &puerto_destino, &fd_destino)) {
             rollback_y_denegar(job_id, cliente->fd, idx);
             return;
-        }
-        int puerto_destino = nodo->puerto;
-        // Reutilizar conexión existente al nodo; si no hay, abrir una nueva y registrarla.
-        ClienteConectado *cx = nodo_obtener_conexion(ip_destino, puerto_destino,
-                                                    estado->registro_nodos);
-        int fd_destino;
-        if (cx != NULL) {
-            fd_destino = cx->fd;
-        } else {
-            fd_destino = conectar_a_nodo(ip_destino, puerto_destino);
-            if (fd_destino != -1) {
-                ClienteConectado *nueva = crear_cliente_conectado(fd_destino, 0);
-                servidor_agregar_cliente_en_epoll(nueva, EPOLLIN | EPOLLONESHOT);
-                nodo_registrar_conexion(ip_destino, puerto_destino, nueva,
-                                        estado->registro_nodos);
-            }
         }
 
+        // Sin conexión cacheada: abrir una nueva. conectar_a_nodo bloquea, así que
+        // va FUERA del lock; después se registra en el epoll y se cachea bajo lock.
         if (fd_destino == -1) {
-            rollback_y_denegar(job_id, cliente->fd, idx);
-            return;
+            fd_destino = conectar_a_nodo(ip_destino, puerto_destino);
+            if (fd_destino == -1) {
+                rollback_y_denegar(job_id, cliente->fd, idx);
+                return;
+            }
+            ClienteConectado *nueva = crear_cliente_conectado(fd_destino, 0);
+            servidor_agregar_cliente_en_epoll(nueva, EPOLLIN | EPOLLONESHOT);
+            gestor_registrar_conexion(estado, ip_destino, puerto_destino, nueva);
         }
 
         pthread_mutex_lock(&estado->lock);
@@ -397,6 +391,8 @@ static void red_release(int job_id, char* recurso, int cant_res) {
     printf("[CONTROLADOR] RELEASE recibido para job %d: %s %d\n", job_id, recurso, cant_res);
     gestor_manejar_release(estado, recurso, job_id, cant_res, callback_granted_red);
 }
+
+//------------------------------------------------------------------------------
 
 // Callback de timeout: cuando un RESERVE lleva más de TIEMPO_ESPERA_RESERVA
 // encolado sin resolverse, avisamos DENIED al coordinador que lo originó para

@@ -10,21 +10,14 @@ static Nodo nodo_copiar(Nodo nodo){
     return nodo;
 }
 
-// BUG (concurrencia): nodo->conexion es el mismo ClienteConectado* que el
-// loop de epoll en Agente.c guarda en eventos[n].data.ptr y despacha desde
-// cualquiera de los 4 hilos worker, sin tomar estado->lock antes de leer
-// entidad->fd. Si este destructor corre (vía desconectar(), llamado cada
-// 15s con el lock tomado) justo cuando otro hilo está despachando un
-// evento para ese mismo fd, ese hilo termina leyendo/usando memoria ya
-// liberada (use-after-free), y el fd puede haber sido reciclado por el
-// kernel para un socket completamente distinto entre el close() de acá y
-// el recv() del otro hilo. No hay ningún mecanismo hoy que coordine el
-// cierre de una conexión cacheada con el despacho de epoll.
+// El ClienteConectado cacheado en nodo->conexion es propiedad del loop de epoll
+// (que lo crea, lo registra en el epoll y lo destruye en el camino de
+// desconexión). El registro de nodos solo guarda una referencia débil, así que
+// acá NO se hace close()/free() de la conexión: hacerlo competiría con el epoll
+// despachando ese mismo fd desde otro hilo (use-after-free). Si el nodo se saca
+// del registro con una conexión todavía viva, esa conexión queda huérfana pero
+// sigue funcionando y se libera cuando se cierra (en el loop de epoll).
 static void nodo_destruir(Nodo nodo){
-    if (nodo->conexion != NULL) {
-        close(nodo->conexion->fd);
-        free(nodo->conexion);
-    }
     free(nodo);
 }
 
@@ -221,60 +214,20 @@ static Nodo buscar_nodo_ptr(char* ip, int puerto, TablaNodos tabla_nodos) {
     return (Nodo)tablahash_buscar(tabla_nodos->tabla, &busqueda);
 }
 
-ClienteConectado* nodo_obtener_conexion(char* ip, int puerto, TablaNodos tabla_nodos) {
-    Nodo n = buscar_nodo_ptr(ip, puerto, tabla_nodos);
-    return (n != NULL) ? n->conexion : NULL;
-}
-
 void nodo_registrar_conexion(char* ip, int puerto, ClienteConectado* cliente, TablaNodos tabla_nodos) {
     Nodo n = buscar_nodo_ptr(ip, puerto, tabla_nodos);
     if (n != NULL) n->conexion = cliente;
 }
 
-
-
 void nodo_limpiar_conexion_por_fd(int fd, TablaNodos tabla_nodos) {
-    GList temp = tabla_nodos->lista;
-    if (temp == NULL) return; // La lista está vacía
-
-    // BUG: acá se pone conexion = NULL antes de tablahash_eliminar, así que
-    // nodo_destruir no vuelve a cerrar/liberar esa conexión (eso está bien).
-    // Pero tablahash_eliminar no solo "limpia la conexión": borra el Nodo
-    // ENTERO de la tabla, contradiciendo el nombre de la función y el
-    // comentario del .h ("no libera memoria, el caller lo hace"). El nodo
-    // remoto completo (ip/cpu/gpu/mem conocidos) desaparece del registro
-    // apenas se cae esta conexión cacheada, en vez de esperar los 15s sin
-    // ANNOUNCE documentados en arquitectura.md como único criterio de
-    // desconexión. El fix sería no llamar tablahash_eliminar acá y dejar
-    // que sea el propio nodo el que quede con conexion = NULL hasta el
-    // próximo ANNOUNCE o hasta que desconectar() lo expire por timeout.
-
-    // El fd esta primero en la lista
-    Nodo n_cabeza = (Nodo)temp->data;
-    if (n_cabeza != NULL && n_cabeza->conexion != NULL && n_cabeza->conexion->fd == fd) {
-        n_cabeza->conexion = NULL;
-        tablahash_eliminar(tabla_nodos->tabla, n_cabeza);
-        tabla_nodos->lista = temp->next; // La nueva cabeza es el segundo nodo
-        free(temp); // Liberamos el eslabón de la GList
-        return;
-    }
-
-    // El fd esta en la lista pero no es el primero
-    while (temp->next != NULL) {
-        Nodo n_siguiente = (Nodo)temp->next->data;
-
-        if (n_siguiente != NULL && n_siguiente->conexion != NULL && 
-                n_siguiente->conexion->fd == fd) {
-            n_siguiente->conexion = NULL;
-            tablahash_eliminar(tabla_nodos->tabla, n_siguiente);
-
-            // Reestructuramos los punteros para puentear el eslabón eliminado
-            GList borrar = temp->next;
-            temp->next = temp->next->next; 
-            free(borrar);
+    // Solo desvincula la conexión cacheada (conexion = NULL). NO elimina el nodo
+    // del registro (eso lo decide el timeout de 15s en desconectar()) ni libera
+    // el ClienteConectado (lo hace el loop de epoll, su dueño).
+    for (GList temp = tabla_nodos->lista; temp != NULL; temp = temp->next) {
+        Nodo n = (Nodo)temp->data;
+        if (n != NULL && n->conexion != NULL && n->conexion->fd == fd) {
+            n->conexion = NULL;
             return;
         }
-        // Avanzamos al siguiente eslabón
-        temp = temp->next;
     }
 }

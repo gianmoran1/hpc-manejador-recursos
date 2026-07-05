@@ -78,8 +78,7 @@ static void servidor_gestion_cliente(ClienteConectado* cliente) {
         printf("[CONEXIONES] Nodo de red (FD %d) desconectado.\n", cliente->fd);
         controlador_desconexion_cliente(cliente->fd);
         destruir_cliente(cliente);
-    }
-    else {
+    } else {
         printf("[CONEXIONES] Mensaje recibido de cliente (FD %d).\n", cliente->fd);
         controlador_mensaje_cliente(cliente);
         servidor_modificar_cliente_en_epoll(cliente, EPOLLIN | EPOLLONESHOT);
