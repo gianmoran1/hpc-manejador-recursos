@@ -40,7 +40,15 @@ int gestor_manejar_reserva(EstadoGlobal estado, char* nombre_recurso, int job_id
 para enviar de forma asíncrona el mensaje GRANTED por TCP a los sockets que correspondan*/
 void gestor_manejar_release(EstadoGlobal estado, char* nombre_recurso, int job_id, int cantidad, void (*avisar_red)(int, int));
 void gestor_liberar_job(EstadoGlobal estado, int job_id, void (*avisar_red)(int, int));
-void gestor_expirar_pedidos(EstadoGlobal estado, void (*avisar_timeout)(int, int));
+/* Higiene de colas locales: desencola (en silencio) los RESERVE encolados que
+ * superaron TIEMPO_ESPERA_RESERVA. No notifica a nadie; el reintento lo dispara
+ * el timeout del coordinador (gestor_expirar_peticiones). */
+void gestor_expirar_pedidos(EstadoGlobal estado);
+
+/* Lado coordinador: expira las PeticionMulti que superaron TIEMPO_ESPERA_RESERVA
+ * sin completarse (respondidos < total). Por cada una llama cb_timeout(p) —para
+ * mandar RELEASE a sus nodos y JOB_TIMEOUT a Erlang— y luego la destruye. */
+void gestor_expirar_peticiones(EstadoGlobal estado, void (*cb_timeout)(PeticionMulti));
 
 /*maneja la desconexión de un socket, liberando todos los recursos asociados a ese socket y avisando a los clientes afectados */
 void manejar_desconexion_socket(EstadoGlobal estado, int socket_caido, void (*avisar_red)(int, int));

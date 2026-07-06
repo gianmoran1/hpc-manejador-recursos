@@ -110,7 +110,7 @@ void* servidor_bucle_principal(void* args) {
             else if (fd_listo == timer_anuncios_fd)
                 controlador_anuncio_recursos();
             else if (fd_listo == timer_timeout)
-                timer_deadlock_nodos();
+                controlador_timer();
             // Cliente ya conectado mandando texto (RESERVE, JOB_REQUEST, etc).
             else // No es EPOLLEXCLUSIVE, race condition posible.
                 servidor_gestion_cliente((ClienteConectado *) eventos[n].data.ptr);

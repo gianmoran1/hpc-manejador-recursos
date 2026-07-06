@@ -158,7 +158,7 @@ void gestor_liberar_job(EstadoGlobal estado, int job_id, void (*avisar_red)(int,
     pthread_mutex_unlock(&estado->lock);
 }
 
-void gestor_expirar_pedidos(EstadoGlobal estado, void (*avisar_timeout)(int, int)) {
+void gestor_expirar_pedidos(EstadoGlobal estado) {
     pthread_mutex_lock(&estado->lock);
     time_t ahora = time(NULL);
     RecursoLocal recursos[] = {estado->cpu, estado->gpu, estado->mem};
@@ -168,14 +168,16 @@ void gestor_expirar_pedidos(EstadoGlobal estado, void (*avisar_timeout)(int, int
         int termine = 0;
 
         if (rec ==  NULL) continue;
-        
         while (!cola_es_vacia(rec->pendientes) && !termine) {
-            SolicitudPendiente solicitud = (SolicitudPendiente)cola_inicio(rec->pendientes, no_copia_solicitud);
+            SolicitudPendiente solicitud =
+                (SolicitudPendiente)cola_inicio(rec->pendientes, no_copia_solicitud);
             if (!solicitud) break;
 
             if (difftime(ahora, solicitud->instante_llegada) >= TIEMPO_ESPERA_RESERVA) {
-                printf("[TIMEOUT] El job_id %d caducó en recurso %s.\n", solicitud->job_id, rec->nombre);
-                if (avisar_timeout) avisar_timeout(solicitud->job_id, solicitud->socket_origen);
+                // Desencolar en silencio: el reintento lo dispara el timeout del
+                // coordinador (gestor_expirar_peticiones), no el dueño del recurso.
+                printf("[TIMEOUT] job %d caducó encolado en %s (desencolado).\n",
+                    solicitud->job_id, rec->nombre);
                 rec->pendientes = cola_desencolar(rec->pendientes, destruir_solicitud);
             } else {
                 termine = 1;
@@ -185,9 +187,41 @@ void gestor_expirar_pedidos(EstadoGlobal estado, void (*avisar_timeout)(int, int
     pthread_mutex_unlock(&estado->lock);
 }
 
-// -----------------------------------------------------------------------------
-// PROTOCOLO ANTE DESCONEXIONES 
-// -----------------------------------------------------------------------------
+// Contexto para recolectar, bajo lock, los job_id de peticiones vencidas.
+struct ctx_expira_peticion { time_t ahora; int *vencidos; int n; };
+
+static void visitar_peticion_vencida(void *dato, void *extra) {
+    PeticionMulti p = (PeticionMulti)dato;
+    struct ctx_expira_peticion *ctx = (struct ctx_expira_peticion *)extra;
+    if (p->respondidos < p->total &&
+        difftime(ctx->ahora, p->instante_creacion) >= TIEMPO_ESPERA_RESERVA) {
+        ctx->vencidos[ctx->n++] = p->job_id;
+    }
+}
+
+void gestor_expirar_peticiones(EstadoGlobal estado, void (*cb_timeout)(PeticionMulti)) {
+    pthread_mutex_lock(&estado->lock);
+    int cap = tablahash_nelems(estado->peticiones_pendientes);
+    if (cap > 0) {
+        // Recolectamos primero: no se puede eliminar durante el recorrido.
+        int *vencidos = malloc(cap * sizeof(int));
+        struct ctx_expira_peticion ctx = { time(NULL), vencidos, 0 };
+        tablahash_recorrer(estado->peticiones_pendientes, visitar_peticion_vencida, &ctx);
+
+        for (int i = 0; i < ctx.n; i++) {
+            struct peticionMulti_ busq;
+            busq.job_id = vencidos[i];
+            PeticionMulti p = tablahash_buscar(estado->peticiones_pendientes, &busq);
+            if (p) {
+                if (cb_timeout) cb_timeout(p);   // RELEASE a los nodos + JOB_TIMEOUT
+                tablahash_eliminar(estado->peticiones_pendientes, &busq);
+            }
+        }
+        free(vencidos);
+    }
+    pthread_mutex_unlock(&estado->lock);
+}
+
 static void (*aviso_red_actual)(int, int) = NULL;
 static EstadoGlobal estado_actual = NULL;
 
@@ -230,11 +264,6 @@ void manejar_desconexion_socket(EstadoGlobal estado, int socket_caido,
     pthread_mutex_unlock(&estado->lock);
 }
 
-
-// -----------------------------------------------------------------------------
-// GESTIÓN DE PETICIONES MULTI-RECURSO
-// -----------------------------------------------------------------------------
-
 void gestor_registrar_peticion(EstadoGlobal estado, PeticionMulti p) {
     pthread_mutex_lock(&estado->lock);
     tablahash_insertar(estado->peticiones_pendientes, p);
@@ -253,18 +282,12 @@ void gestor_eliminar_peticion(EstadoGlobal estado, int job_id) {
     tablahash_eliminar(estado->peticiones_pendientes, &busqueda);
 }
 
-// -----------------------------------------------------------------------------
-// OPERACIONES DEL RADAR DE NODOS (Protocolo Erlang / UDP)
-// -----------------------------------------------------------------------------
-
 void gestor_procesar_anuncio(EstadoGlobal estado, char* ip, int puerto, int cpu, 
                             int gpu, int mem) {
     pthread_mutex_lock(&estado->lock);
     procesar_anuncio(estado->registro_nodos, ip, puerto, cpu, gpu, mem);
     pthread_mutex_unlock(&estado->lock);
 }
-
-// -----------------------------------------------------------------------------
 
 char* gestor_get_nodes(EstadoGlobal estado) {
     pthread_mutex_lock(&estado->lock);
@@ -274,17 +297,12 @@ char* gestor_get_nodes(EstadoGlobal estado) {
 }
 
 void gestor_desconectar_nodos(EstadoGlobal estado) {
-     pthread_mutex_lock(&estado->lock);
-    // desconecta tras 15 segundos.
-    desconectar(estado->registro_nodos);
+    pthread_mutex_lock(&estado->lock);
+    // Desconecta tras 15 segundos.
+    gestor_desconectar_nodos_timeout(estado->registro_nodos);
     pthread_mutex_unlock(&estado->lock);
 }
 
-// Lookup atómico bajo lock: escribe en *puerto_out el puerto del nodo y en
-// *fd_cacheado_out el fd de su conexión cacheada (o -1 si no tiene). Devuelve 1
-// si el nodo está en el registro, 0 si no. No deja escapar ningún puntero a
-// Nodo/ClienteConectado fuera del lock (evita el use-after-free si el timer
-// libera el nodo).
 int gestor_obtener_destino(EstadoGlobal estado, char* ip, int* puerto_out, int* fd_cacheado_out) {
     pthread_mutex_lock(&estado->lock);
     Nodo n = buscar_nodo_por_ip(ip, estado->registro_nodos);

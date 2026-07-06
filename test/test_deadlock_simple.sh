@@ -4,7 +4,7 @@
 # Escenario:
 #   Job 9000 satura gpu:1 del gestor             → GRANTED (resultado 1)
 #   Job 1001 pide gpu:1 con GPU ocupada           → encolado (resultado 0)
-#   gestor_expirar_pedidos detecta el vencimiento → callback JOB_TIMEOUT al socket 10
+#   gestor_expirar_pedidos desencola el vencido   → cola vacía (desencolado silencioso)
 #   Job 9000 liberado, Job 1001 reintenta         → GRANTED (deadlock resuelto)
 
 set -uo pipefail
@@ -29,15 +29,13 @@ cat > "$BUILD/test_deadlock.c" << 'CTEST'
 #include "gestor_estado.h"
 
 /* ── Callbacks que registran lo que se "enviaría" por red ── */
-static int ultimo_timeout_job  = -1;
-static int ultimo_timeout_sock = -1;
 static int ultimo_granted_job  = -1;
 static int ultimo_granted_sock = -1;
+static int ultimo_timeout_peticion = -1;
 
-static void cb_timeout(int job_id, int sock) {
-    printf("  [NET] JOB_TIMEOUT %d -> socket %d\n", job_id, sock);
-    ultimo_timeout_job  = job_id;
-    ultimo_timeout_sock = sock;
+static void cb_timeout_peticion(PeticionMulti p) {
+    printf("  [NET] JOB_TIMEOUT %d (peticion, %d nodos)\n", p->job_id, p->total);
+    ultimo_timeout_peticion = p->job_id;
 }
 
 static void cb_granted(int job_id, int sock) {
@@ -78,10 +76,9 @@ int main(void) {
         (SolicitudPendiente)cola_inicio(estado->gpu->pendientes, sin_copia);
     if (sol) sol->instante_llegada = 0;  /* epoch → difftime siempre >= TIEMPO_ESPERA */
 
-    gestor_expirar_pedidos(estado, cb_timeout);
-    assert_true(ultimo_timeout_job  == 1001, "JOB_TIMEOUT disparado para job 1001");
-    assert_true(ultimo_timeout_sock == 10,   "JOB_TIMEOUT enviado al socket correcto (10)");
-    assert_true(cola_es_vacia(estado->gpu->pendientes), "Cola GPU vacía tras expiración");
+    gestor_expirar_pedidos(estado);
+    assert_true(cola_es_vacia(estado->gpu->pendientes),
+                "Cola GPU vacía tras expiración (desencolado silencioso)");
 
     /* ── Paso 4: liberar Job 9000 y reintentar ── */
     printf("\n--- Paso 4: Job 9000 liberado, Job 1001 reintenta ---\n");
@@ -131,8 +128,9 @@ int main(void) {
     SolicitudPendiente sol_b =
         (SolicitudPendiente)cola_inicio(nodo_b->gpu->pendientes, sin_copia);
     if (sol_b) sol_b->instante_llegada = 0;
-    gestor_expirar_pedidos(nodo_b, cb_timeout);
-    assert_true(ultimo_timeout_job == 500, "Nodo B expiró el pedido de job 500");
+    gestor_expirar_pedidos(nodo_b);
+    assert_true(cola_es_vacia(nodo_b->gpu->pendientes),
+                "Nodo B: pedido de job 500 desencolado por timeout");
 
     /* Rollback: el agente recibe el DENIED/TIMEOUT y libera lo ya grantado en Nodo A */
     gestor_liberar_job(nodo_a, 500, cb_granted);
@@ -213,6 +211,41 @@ int main(void) {
     estado_destruir(e2);
 
     estado_destruir(e);
+
+    /* ══════════════════════════════════════════════════════════════════
+     * ESCENARIO 4: Timeout del coordinador (gestor_expirar_peticiones)
+     * ══════════════════════════════════════════════════════════════════ */
+    printf("\n=== Escenario 4: Timeout del coordinador ===\n\n");
+
+    /* Petición incompleta y vieja → debe expirar y disparar JOB_TIMEOUT */
+    EstadoGlobal coord = estado_crear(4, 1, 1024);
+    PeticionMulti pet = peticion_crear(7777, 55, 2);   /* espera 2 respuestas */
+    pet->instante_creacion = 0;                        /* epoch → vencida */
+    pet->respondidos = 1;                              /* incompleta: 1 de 2 */
+    pet->nodos[0].fd_remoto = 30; strcpy(pet->nodos[0].recurso, "cpu"); pet->nodos[0].cantidad = 2;
+    pet->nodos[1].fd_remoto = 31; strcpy(pet->nodos[1].recurso, "gpu"); pet->nodos[1].cantidad = 1;
+    gestor_registrar_peticion(coord, pet);
+
+    ultimo_timeout_peticion = -1;
+    gestor_expirar_peticiones(coord, cb_timeout_peticion);
+    assert_true(ultimo_timeout_peticion == 7777, "Peticion 7777 vencida -> JOB_TIMEOUT");
+
+    pthread_mutex_lock(&coord->lock);
+    PeticionMulti buscada = gestor_buscar_peticion(coord, 7777);
+    pthread_mutex_unlock(&coord->lock);
+    assert_true(buscada == NULL, "Peticion 7777 eliminada tras el timeout");
+    estado_destruir(coord);
+
+    /* Una petición COMPLETA (respondidos == total) no debe expirar */
+    EstadoGlobal coord2 = estado_crear(4, 1, 1024);
+    PeticionMulti completa = peticion_crear(8888, 55, 1);
+    completa->instante_creacion = 0;   /* vieja... */
+    completa->respondidos = 1;         /* ...pero completa (1 de 1) */
+    gestor_registrar_peticion(coord2, completa);
+    ultimo_timeout_peticion = -1;
+    gestor_expirar_peticiones(coord2, cb_timeout_peticion);
+    assert_true(ultimo_timeout_peticion == -1, "Peticion completa NO se expira aunque sea vieja");
+    estado_destruir(coord2);
 
     printf("\nPasados: %d  |  Fallidos: %d\n", pass, fail);
     printf(fail == 0 ? "TODOS LOS TESTS PASARON\n" : "ALGUNOS TESTS FALLARON\n");

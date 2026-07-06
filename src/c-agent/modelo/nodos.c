@@ -92,7 +92,7 @@ int reiniciar_timestamp(char* ip, int puerto, TablaNodos tabla_nodos){
     return 0;
 }
 
-void desconectar(TablaNodos tabla_nodos){
+void gestor_desconectar_nodos_timeout(TablaNodos tabla_nodos){
     GList temp = tabla_nodos->lista;
     if (temp == NULL) return; // No hay nodos
 

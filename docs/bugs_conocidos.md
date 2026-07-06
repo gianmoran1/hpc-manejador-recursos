@@ -179,13 +179,18 @@ Conviene confirmarlo leyendo la lógica de colas de `gestor_manejar_release`.
 
 ---
 
-## Pendiente transversal: timeout del coordinador
+## Timeout del coordinador — resuelto
 
-La `PeticionMulti` que crea `erlang_job_request` **no expira nunca** si un peer
-queda mudo (nunca responde `GRANTED`/`DENIED`, o el `RESERVE` no llegó). El timer
-de mantenimiento (`timer_deadlock_nodos` → `gestor_expirar_pedidos`) solo expira
-los `RESERVE` **encolados localmente**, no las `peticiones_pendientes` salientes.
-Resultado: el job se cuelga (Erlang nunca recibe `JOB_GRANTED` ni `JOB_DENIED`) y
-la petición queda leakeada. El fix vive en el timer/gestor, pero la petición nace
-en esta rama. Requiere primero definir el contrato con Erlang (qué mensaje espera
-ante un timeout: la doc menciona `JOB_TIMEOUT` pero el código reusa `JOB_DENIED`).
+La `PeticionMulti` ahora expira: se le agregó `instante_creacion`, y el timer
+(`controlador_timer` → `gestor_expirar_peticiones`) recorre `peticiones_pendientes`
+(vía el nuevo `tablahash_recorrer`) y, por cada una que superó
+`TIEMPO_ESPERA_RESERVA` sin completarse (`respondidos < total`), manda `RELEASE` a
+todos sus nodos + `JOB_TIMEOUT` a su Erlang (que reintenta con backoff) y la
+destruye.
+
+Contrato con Erlang (confirmado leyendo `jobWorker.erl`/`tcpClient.erl`):
+`JOB_DENIED` = fallo permanente (el worker no reintenta); `JOB_TIMEOUT` = reintenta.
+Por eso el timeout se manda como `JOB_TIMEOUT`, no `JOB_DENIED`. **No se agregó
+ningún mensaje de timeout entre agentes**: el coordinador detecta el vencimiento
+por sí mismo. El timeout del dueño (`gestor_expirar_pedidos`) pasó a **desencolar
+en silencio** (higiene de cola); ya no le manda nada al coordinador.

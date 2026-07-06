@@ -27,6 +27,6 @@ void callback_granted_red(int job_id, int socket_fd);
  * Handler del timer de mantenimiento: expira los RESERVE encolados vencidos
  * (anti-deadlock) y desconecta los nodos sin ANNOUNCE reciente.
  */
-void timer_deadlock_nodos(void);
+void controlador_timer(void);
 
 #endif /* __CONTROLADOR_H__ */

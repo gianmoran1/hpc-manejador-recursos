@@ -59,7 +59,7 @@ void destruir_tabla_nodos(TablaNodos);
  * con una conexión viva, esta queda huérfana y se libera cuando se cierra.
  * Debe llamarse con estado->lock tomado (lo hace gestor_desconectar_nodos).
  */
-void desconectar(TablaNodos tabla_nodos);
+void gestor_desconectar_nodos_timeout(TablaNodos tabla_nodos);
 
 /**
  * Arma el string de respuesta para GET_NODES:

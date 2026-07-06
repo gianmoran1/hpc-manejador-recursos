@@ -394,20 +394,28 @@ static void red_release(int job_id, char* recurso, int cant_res) {
 
 //------------------------------------------------------------------------------
 
-// Callback de timeout: cuando un RESERVE lleva más de TIEMPO_ESPERA_RESERVA
-// encolado sin resolverse, avisamos DENIED al coordinador que lo originó para
-// que haga rollback y notifique JOB_DENIED a Erlang.
-static void notificar_denied_timeout(int job_id, int socket_fd) {
+// Callback de timeout del lado coordinador: la PeticionMulti venció sin
+// completarse. Manda RELEASE a todos sus nodos (rollback) y JOB_TIMEOUT a su
+// Erlang para que reintente. Se invoca con estado->lock tomado (desde el gestor).
+static void notificar_timeout_peticion(PeticionMulti p) {
+    for (int i = 0; i < p->total; i++) {
+        char msj[64];
+        snprintf(msj, sizeof(msj), "RELEASE %d %s %d\n",
+                 p->job_id, p->nodos[i].recurso, p->nodos[i].cantidad);
+        enviar_mensaje_tcp(p->nodos[i].fd_remoto, msj);
+    }
     char msj[64];
-    snprintf(msj, sizeof(msj), "DENIED %d\n", job_id);
-    enviar_mensaje_tcp(socket_fd, msj);
+    snprintf(msj, sizeof(msj), "JOB_TIMEOUT %d\n", p->job_id);
+    enviar_mensaje_tcp(p->socket_erlang, msj);
 }
 
-void timer_deadlock_nodos(void) {
-    uint64_t expiraciones;
-    read(timer_timeout, &expiraciones, sizeof(expiraciones));
-    // Expirar RESERVE encolados vencidos (anti-deadlock)
-    gestor_expirar_pedidos(estado, notificar_denied_timeout);
-    // Desconectar nodos que no enviaron ANNOUNCE recientemente
+void controlador_timer() {
+    uint64_t _expiraciones;
+    read(timer_timeout, &_expiraciones, sizeof(_expiraciones));
+    // Higiene: desencola en silencio los RESERVE locales que quedaron vencidos.
+    gestor_expirar_pedidos(estado);
+    // Coordinador: expira las PeticionMulti sin completar → JOB_TIMEOUT + rollback.
+    gestor_expirar_peticiones(estado, notificar_timeout_peticion);
+    // Desconecta nodos sin ANNOUNCE reciente.
     gestor_desconectar_nodos(estado);
 }

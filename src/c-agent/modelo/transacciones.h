@@ -1,6 +1,8 @@
 #ifndef __TRANSACCIONES_H__
 #define __TRANSACCIONES_H__
 
+#include <time.h>
+
 #define MAX_NODOS_PETICION 16
 
 typedef struct nodoReserva_ {
@@ -11,10 +13,11 @@ typedef struct nodoReserva_ {
 } NodoReserva;
 
 typedef struct peticionMulti_ {
-    int job_id;
-    int socket_erlang;   /* fd de Erlang para JOB_GRANTED / JOB_DENIED */
-    int total;           /* cuántos RESERVE se enviaron */
-    int respondidos;     /* cuántos ya respondieron */
+    int    job_id;
+    int    socket_erlang;      /* fd de Erlang para JOB_GRANTED / JOB_DENIED / JOB_TIMEOUT */
+    int    total;              /* cuántos RESERVE se enviaron */
+    int    respondidos;        /* cuántos ya respondieron */
+    time_t instante_creacion;  /* para expirar la petición si no se completa a tiempo */
     NodoReserva nodos[MAX_NODOS_PETICION];
 } *PeticionMulti;
 

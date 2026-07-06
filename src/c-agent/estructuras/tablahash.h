@@ -48,4 +48,10 @@ void *tablahash_buscar(TablaHash tabla, void *dato);
  */
 void tablahash_eliminar(TablaHash tabla, void *dato);
 
+/**
+ * Aplica 'visita' a cada dato vivo de la tabla, pasándole 'extra' como contexto.
+ * Solo lectura: 'visita' no debe insertar ni eliminar de la tabla.
+ */
+void tablahash_recorrer(TablaHash tabla, void (*visita)(void *dato, void *extra), void *extra);
+
 #endif /* __TABLAHASH_H__ */

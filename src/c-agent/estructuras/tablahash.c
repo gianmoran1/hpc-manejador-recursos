@@ -206,3 +206,9 @@ void tablahash_eliminar(TablaHash tabla, void *dato) {
     idx = (idx +1) % tabla->capacidad;
   }
 }
+
+void tablahash_recorrer(TablaHash tabla, void (*visita)(void *dato, void *extra), void *extra) {
+  for (unsigned idx = 0; idx < tabla->capacidad; ++idx)
+    if (tabla->elems[idx].dato != NULL)
+      visita(tabla->elems[idx].dato, extra);
+}
