@@ -9,7 +9,7 @@
 #include "servidor.h"      // globals del servidor: estado, usock_udp, timers
 #include "red/sockets.h"   // enviar/atender_* y conectar_a_nodo
 #include "gestor_estado.h" // implementacion del gestor de recursos
-#include "modelo/transacciones.h" // PeticionMulti para rollback de JOB_REQUEST
+#include "modelo/peticiones.h" // PeticionMulti para rollback de JOB_REQUEST
 
 EstadoGlobal estado = NULL;
 
@@ -29,7 +29,7 @@ static void red_release(int job_id, char* recurso, int cant_res);
 // -----------------------------------------------------------------------------
 
 void controlador_anuncio_recibido(char* buffer_udp) {
-    char ip_node[50], cmd[32];
+    char ip_node[TAM_BUFFER_IP], cmd[32];
     int puerto_node = 0, cpu = 0, gpu = 0, mem = 0;
     int n = sscanf(buffer_udp, "%49s %31s %d", ip_node, cmd, &puerto_node);
     if (n == 3 && strcmp(cmd, "ANNOUNCE") == 0) {
@@ -43,9 +43,9 @@ void controlador_anuncio_recibido(char* buffer_udp) {
         while (sscanf(ptr, "%63s", tok) == 1) {
             char res[16]; int val;
             if (sscanf(tok, "%15[^:]:%d", res, &val) == 2) {
-                if      (strcmp(res, "cpu") == 0) cpu = val;
-                else if (strcmp(res, "gpu") == 0) gpu = val;
-                else if (strcmp(res, "mem") == 0) mem = val;
+                if      (strcmp(res, RECURSO_CPU) == 0) cpu = val;
+                else if (strcmp(res, RECURSO_GPU) == 0) gpu = val;
+                else if (strcmp(res, RECURSO_MEM) == 0) mem = val;
             }
             while (*ptr && *ptr != ' ') ptr++;
             while (*ptr == ' ') ptr++;
@@ -176,7 +176,7 @@ static void erlang_job_request(ClienteConectado *cliente, int job_id, char* msg)
     int idx = 0;
     char token[128];
     while (sscanf(cursor, "%127s", token) == 1) {
-        char ip_destino[50], nombre_recurso[32];
+        char ip_destino[TAM_BUFFER_IP], nombre_recurso[32];
         int cantidad;
 
         if (sscanf(token, "@%49[^:]:%31[^:]:%d",

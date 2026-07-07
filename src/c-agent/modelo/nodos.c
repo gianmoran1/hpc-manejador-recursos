@@ -1,5 +1,4 @@
 #include "nodos.h"
-#include "config.h"
 #include <assert.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -10,13 +9,9 @@ static Nodo nodo_copiar(Nodo nodo){
     return nodo;
 }
 
-// El ClienteConectado cacheado en nodo->conexion es propiedad del loop de epoll
-// (que lo crea, lo registra en el epoll y lo destruye en el camino de
-// desconexión). El registro de nodos solo guarda una referencia débil, así que
-// acá NO se hace close()/free() de la conexión: hacerlo competiría con el epoll
-// despachando ese mismo fd desde otro hilo (use-after-free). Si el nodo se saca
-// del registro con una conexión todavía viva, esa conexión queda huérfana pero
-// sigue funcionando y se libera cuando se cierra (en el loop de epoll).
+// nodo->conexion es una referencia débil: el ClienteConectado es propiedad del
+// loop de epoll. Por eso acá NO se hace close()/free() de la conexión; hacerlo
+// competiría con el epoll despachando ese fd desde otro hilo (use-after-free).
 static void nodo_destruir(Nodo nodo){
     free(nodo);
 }
@@ -41,11 +36,12 @@ static unsigned nodo_hash(Nodo a){
 
 TablaNodos crear_tabla_nodos(){
     TablaNodos tabla_nodos = malloc(sizeof(struct tabla_nodos));
-    TablaHash tablahash = tablahash_crear(100, (FuncionCopia)nodo_copiar, 
+    assert(tabla_nodos);
+    tabla_nodos->tabla = tablahash_crear(TAM_INICIAL_TABLA_HASH, 
+                                (FuncionCopia)nodo_copiar, 
                                 (FuncionComparadora) nodo_comparar, 
                                 (FuncionDestructora) nodo_destruir,
                                 (FuncionHash) nodo_hash);
-    tabla_nodos->tabla = tablahash;
     tabla_nodos->lista = NULL;
     return tabla_nodos;
 }

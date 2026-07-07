@@ -1,13 +1,18 @@
 #ifndef __CONFIG_H__
 #define __CONFIG_H__
 
-// Constantes de configuración del agente: valores hardcodeados que se usan en
-// varios módulos (red, capacidades, temporizadores, buffers).
-
 // Capacidad de recursos del nodo
 #define CAP_CPU 4
 #define CAP_GPU 1
 #define CAP_MEM 8192
+
+#define TAM_INICIAL_TABLA_HASH 100
+
+#define TAM_BUFFER_IP 50
+
+#define RECURSO_CPU "cpu"
+#define RECURSO_GPU "gpu"
+#define RECURSO_MEM "mem"
 
 // Red
 #define PUERTO_TCP   4040

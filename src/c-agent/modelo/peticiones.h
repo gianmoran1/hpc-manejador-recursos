@@ -1,5 +1,5 @@
-#ifndef __TRANSACCIONES_H__
-#define __TRANSACCIONES_H__
+#ifndef __PETICIONES_H__
+#define __PETICIONES_H__
 
 #include <time.h>
 
@@ -31,15 +31,13 @@ PeticionMulti peticion_crear(int job_id, int socket_erlang, int total);
 
 /**
  * Búsqueda lineal en nodos[0..total) por fd_remoto. Devuelve el puntero al
- * NodoReserva o NULL si no está. El arreglo es chico (<= MAX_NODOS_PETICION)
- * así que la búsqueda lineal es apropiada.
+ * NodoReserva o NULL si no está.
  */
 NodoReserva* peticion_buscar_nodo_por_fd(PeticionMulti p, int fd);
 
 /**
- * Libera la petición. Los NodoReserva viven embebidos en el struct (no son
- * punteros propios), así que no hay nada más que liberar aparte de p.
+ * Libera la memoria de la petición.
  */
 void peticion_destruir(PeticionMulti p);
 
-#endif /* __TRANSACCIONES_H__ */
+#endif /* __PETICIONES_H__ */

@@ -4,10 +4,11 @@
 #include "estructuras/tablahash.h"
 #include "estructuras/glist.h"
 #include "red/cliente.h"
+#include "config.h"
 #include <time.h>
 
 typedef struct nodo_{
-    char ip[50];
+    char ip[TAM_BUFFER_IP];
     int puerto;
     int cpu;
     int gpu;
@@ -19,7 +20,7 @@ typedef struct nodo_{
 typedef struct tabla_nodos{
     TablaHash tabla;
     GList     lista;
-}*TablaNodos;
+} *TablaNodos;
 
 /**
  * Crea una estructura de nodo, con conexion = NULL y ultimo_anuncio = ahora.

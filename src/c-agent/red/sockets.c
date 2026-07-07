@@ -1,6 +1,9 @@
 #include "red/sockets.h"
 #include "config.h"
 
+#define IP_PARA_OBTENER_IP_LOCAL "8.8.8.8"
+#define PUERTO_PARA_OBTENER_IP_LOCAL 53
+
 void quit(char *s)
 {
 	perror(s);
@@ -10,15 +13,15 @@ void quit(char *s)
 void obtener_mi_ip_local(char *buffer_ip) {
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
-        strcpy(buffer_ip, "127.0.0.1"); // Fallback de seguridad
+        strcpy(buffer_ip, IP_LOCAL); // Fallback de seguridad
         return;
     }
 
     struct sockaddr_in serv;
     memset(&serv, 0, sizeof(serv));
     serv.sin_family = AF_INET;
-    serv.sin_addr.s_addr = inet_addr("8.8.8.8");
-    serv.sin_port = htons(53);
+    serv.sin_addr.s_addr = inet_addr(IP_PARA_OBTENER_IP_LOCAL);
+    serv.sin_port = htons(PUERTO_PARA_OBTENER_IP_LOCAL);
 
     // En UDP, connect() no envía nada a la red, solo asocia la dirección
     connect(sock, (const struct sockaddr*) &serv, sizeof(serv));

@@ -13,6 +13,8 @@
 #include "red/sockets.h"
 #include "red/cliente.h"
 
+#include "modelo/estado.h"
+
 int main(void) {
     signal(SIGPIPE, SIG_IGN); // Evita que escribir en un socket cerrado mate el proceso.
 

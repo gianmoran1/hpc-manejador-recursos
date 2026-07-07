@@ -1,9 +1,11 @@
-#include "transacciones.h"
+#include "peticiones.h"
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
 
 PeticionMulti peticion_crear(int job_id, int socket_erlang, int total) {
     PeticionMulti p  = malloc(sizeof(struct peticionMulti_));
+    assert(p);
     p->job_id        = job_id;
     p->socket_erlang = socket_erlang;
     p->total         = total;

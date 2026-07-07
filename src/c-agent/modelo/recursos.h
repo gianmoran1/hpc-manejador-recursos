@@ -4,6 +4,8 @@
 #include "estructuras/cola.h"
 #include <time.h>
 
+#define TAM_NOMBRE_RECURSO 10
+
 typedef struct solicitudPendiente_{
     int job_id;
     int socket_origen;
@@ -12,7 +14,7 @@ typedef struct solicitudPendiente_{
 } *SolicitudPendiente;
 
 typedef struct recursoLocal_{
-    char nombre[10];
+    char nombre[TAM_NOMBRE_RECURSO];
     int capacidad_total;
     int disponible;
     Cola pendientes;

@@ -1,31 +1,8 @@
 #ifndef __GESTOR_ESTADO_H__
 #define __GESTOR_ESTADO_H__
 
-/*INTERFAZ PRINCIPAL DEL GESTOR DE ESTADO, PARA USAR EN EL LOOP DE EPOLL*/
-
-#include "modelo/recursos.h"
-#include "modelo/jobs.h"
-#include "modelo/nodos.h"
-#include "modelo/transacciones.h"
-#include "estructuras/tablahash.h"
-#include <pthread.h>
-
-typedef struct estadoGlobal_ {
-    RecursoLocal cpu;
-    RecursoLocal gpu;
-    RecursoLocal mem;
-    TablaJobs libro_contable;
-    TablaNodos registro_nodos;
-    TablaHash peticiones_pendientes;
-    pthread_mutex_t lock;
-} *EstadoGlobal;
-
-
-/* Crea e inicializa el estado global del agente con las capacidades dadas de
- * cpu, gpu y mem. Inicializa el mutex interno. Devuelve el puntero al estado. */
-EstadoGlobal estado_crear(int cap_cpu, int cap_gpu, int cap_mem);
-/* Libera todo el estado global (recursos, jobs, nodos, peticiones y mutex). */
-void estado_destruir(EstadoGlobal estado);
+#include "modelo/peticiones.h"
+#include "modelo/estado.h"
 
 /* Escribe en *cpu, *gpu y *mem las unidades actualmente disponibles de cada
  * recurso local. Toma el lock internamente. */
@@ -33,12 +10,15 @@ void gestor_recursos_disponibles(EstadoGlobal estado, int *cpu, int *gpu, int *m
 
 /*RESERVE <job_id> <recurso> <cantidad>*/
 /*maneja una reserva de recurso (reserve), 1 es GRANTED, 0 es encolado, -1 es DENIED*/
-int gestor_manejar_reserva(EstadoGlobal estado, char* nombre_recurso, int job_id, int socket_origen, int cantidad);
+int gestor_manejar_reserva(EstadoGlobal estado, char* nombre_recurso, int job_id, 
+    int socket_origen, int cantidad);
 
 /*RELEASE <job_id> <recurso> <cantidad>*/
 /*maneja la liberación de un recurso (release), Requiere pasar una función de callback (void cb_red(int job_id, int socket_origen)
 para enviar de forma asíncrona el mensaje GRANTED por TCP a los sockets que correspondan*/
-void gestor_manejar_release(EstadoGlobal estado, char* nombre_recurso, int job_id, int cantidad, void (*avisar_red)(int, int));
+void gestor_manejar_release(EstadoGlobal estado, char* nombre_recurso, int job_id, 
+    int cantidad, void (*avisar_red)(int, int));
+
 void gestor_liberar_job(EstadoGlobal estado, int job_id, void (*avisar_red)(int, int));
 /* Higiene de colas locales: desencola (en silencio) los RESERVE encolados que
  * superaron TIEMPO_ESPERA_RESERVA. No notifica a nadie; el reintento lo dispara
@@ -64,8 +44,6 @@ char* gestor_get_nodes(EstadoGlobal estado);
 tambien a ser llamada en el loop, puesto que desconecta al que no haya hecho su annunce */
 void gestor_desconectar_nodos(EstadoGlobal estado);
 
-/* ── Gestión de peticiones multi-recurso ────────────────────────────────── */
-
 /* Inserta la peticion en la lista (toma el lock internamente) */
 void gestor_registrar_peticion(EstadoGlobal estado, PeticionMulti p);
 
@@ -75,14 +53,13 @@ PeticionMulti gestor_buscar_peticion(EstadoGlobal estado, int job_id);
 /* Elimina y libera la peticion con ese job_id. LLAMAR CON estado->lock YA TOMADO. */
 void gestor_eliminar_peticion(EstadoGlobal estado, int job_id);
 
-/* ── Conexiones cacheadas a nodos remotos (todas toman el lock) ──────────── */
-
 /* Lookup atómico: escribe el puerto del nodo y el fd de su conexión cacheada
  * (o -1 si no tiene) en los punteros de salida. Devuelve 1 si el nodo existe. */
 int gestor_obtener_destino(EstadoGlobal estado, char* ip, int* puerto_out, int* fd_cacheado_out);
 
 /* Cachea una conexión saliente ya establecida para el nodo (ip, puerto). */
-void gestor_registrar_conexion(EstadoGlobal estado, char* ip, int puerto, ClienteConectado* cliente);
+void gestor_registrar_conexion(EstadoGlobal estado, char* ip, int puerto, 
+    ClienteConectado* cliente);
 
 /* Desvincula (conexion = NULL) la conexión cacheada que tenga ese fd. */
 void gestor_limpiar_conexion_por_fd(EstadoGlobal estado, int fd);

@@ -1,59 +1,26 @@
 #include "gestor_estado.h"
 #include "config.h"
+#include "modelo/recursos.h"
+#include "modelo/jobs.h"
+#include "modelo/nodos.h"
+#include "modelo/peticiones.h"
+#include "estructuras/tablahash.h"
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
-#include <assert.h>
 
 // Callbacks para la Cola de pendientes de cada RecursoLocal
 
 static void* no_copia_solicitud(void* dato) { return dato; }
 static void destruir_solicitud(void* dato) { free(dato); }
 
-// Callbacks para la TablaHash de peticiones multi-recurso
-
-static void* no_copia_peticion(void* dato) { return dato; }
-
-static int peticion_comparar(void* dato1, void* dato2) {
-    return ((PeticionMulti)dato1)->job_id - ((PeticionMulti)dato2)->job_id;
-}
-
-/* Hash de una petición: su propio job_id. */
-static unsigned peticion_hash(void* dato) {
-    return (unsigned)((PeticionMulti)dato)->job_id;
-}
-
 static RecursoLocal obtener_recurso(EstadoGlobal estado, char* nombre) {
-    if (strcmp(nombre, "cpu") == 0) return estado->cpu;
-    if (strcmp(nombre, "gpu") == 0) return estado->gpu;
-    if (strcmp(nombre, "mem") == 0) return estado->mem;
+    if (strcmp(nombre, RECURSO_CPU) == 0) return estado->cpu;
+    if (strcmp(nombre, RECURSO_GPU) == 0) return estado->gpu;
+    if (strcmp(nombre, RECURSO_MEM) == 0) return estado->mem;
     return NULL;
-}
-
-EstadoGlobal estado_crear(int cap_cpu, int cap_gpu, int cap_mem) {
-    EstadoGlobal e = malloc(sizeof(struct estadoGlobal_));
-    assert(e);
-    e->cpu = recurso_crear("cpu", cap_cpu);
-    e->gpu = recurso_crear("gpu", cap_gpu);
-    e->mem = recurso_crear("mem", cap_mem);
-    e->libro_contable = crear_tabla_jobs();
-    e->registro_nodos = crear_tabla_nodos();
-    e->peticiones_pendientes = tablahash_crear(100, no_copia_peticion,
-        peticion_comparar, (FuncionDestructora)free, peticion_hash);
-    pthread_mutex_init(&e->lock, NULL);
-    return e;
-}
-
-void estado_destruir(EstadoGlobal estado) {
-    recurso_destruir(estado->cpu);
-    recurso_destruir(estado->gpu);
-    recurso_destruir(estado->mem);
-    pthread_mutex_destroy(&estado->lock);
-    destruir_tabla_jobs(estado->libro_contable);
-    destruir_tabla_nodos(estado->registro_nodos);
-    tablahash_destruir(estado->peticiones_pendientes);
-    free(estado);
 }
 
 void gestor_recursos_disponibles(EstadoGlobal estado, int *cpu, int *gpu, int *mem) {
@@ -151,9 +118,9 @@ void gestor_liberar_job(EstadoGlobal estado, int job_id, void (*avisar_red)(int,
     // Ejecutamos las tres liberaciones de manera consecutiva y atómica
     // Cada llamada interna buscará al job por su ID de manera segura, 
     // y la última llamada destruirá la ficha del trabajo al quedar sus deudas en 0.
-    if (cpu > 0) manejar_release_aux(estado, "cpu", job_id, cpu, avisar_red);
-    if (gpu > 0) manejar_release_aux(estado, "gpu", job_id, gpu, avisar_red);
-    if (mem > 0) manejar_release_aux(estado, "mem", job_id, mem, avisar_red);
+    if (cpu > 0) manejar_release_aux(estado, RECURSO_CPU, job_id, cpu, avisar_red);
+    if (gpu > 0) manejar_release_aux(estado, RECURSO_GPU, job_id, gpu, avisar_red);
+    if (mem > 0) manejar_release_aux(estado, RECURSO_MEM, job_id, mem, avisar_red);
 
     pthread_mutex_unlock(&estado->lock);
 }

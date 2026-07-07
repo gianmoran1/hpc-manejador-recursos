@@ -4,7 +4,6 @@
 #include "estructuras/tablahash.h"
 #include "estructuras/glist.h"
 
-// La estructura de la deuda de un trabajo
 typedef struct jobActivo_ {
     int job_id;
     int socket_origen;
@@ -24,10 +23,9 @@ typedef struct tablaJobs_ {
 TablaJobs crear_tabla_jobs();
 
 /**
- * Destruye la tabla de trabajos completa. Libera cada JobActivo a través de
- * la tabla hash (que es la dueña real de la memoria) y recién después libera
- * los nodos de la lista con un destructor no-op, para no liberar el mismo
- * JobActivo dos veces.
+ * Destruye la tabla de jobs completa. Libera cada JobActivo desde la tabla hash
+ * (la dueña de esa memoria) y después los nodos de la lista con un destructor
+ * no-op, para no liberar el mismo JobActivo dos veces.
  */
 void destruir_tabla_jobs(TablaJobs tabla_jobs);
 

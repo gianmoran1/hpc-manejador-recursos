@@ -1,7 +1,9 @@
 #include "jobs.h"
+#include "config.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <assert.h>
 
 static void* job_no_copia(void* dato) {
     return dato;
@@ -19,18 +21,17 @@ static unsigned job_hash(void* dato) {
     return (unsigned)((JobActivo)dato)->job_id;
 }
 
-// No-op: la lista y la tabla hash comparten los mismos punteros JobActivo
-// (se insertan con job_no_copia en ambas). El dueño real de esa memoria es
-// la tabla hash (destruir_tabla_jobs la libera primero); este destructor
-// para la lista solo debe liberar los nodos de la lista (GList), nunca el
-// JobActivo, o se pincha un double free.
+// No-op a propósito: lista y tabla hash comparten los mismos punteros JobActivo.
+// La dueña de esa memoria es la tabla hash; si este destructor de la lista
+// liberara el JobActivo sería un double free.
 static void no_destruye_job(__attribute__((unused)) void* dato) {
 }
 
 TablaJobs crear_tabla_jobs() {
     TablaJobs tj = malloc(sizeof(struct tablaJobs_));
-    tj->tabla = tablahash_crear(100, job_no_copia, job_comparar, job_destruir, 
-        job_hash);
+    assert(tj);
+    tj->tabla = tablahash_crear(TAM_INICIAL_TABLA_HASH, job_no_copia, 
+        job_comparar, job_destruir, job_hash);
     tj->lista = glist_crear();
     return tj;
 }
@@ -64,9 +65,9 @@ void registrar_asignacion(TablaJobs tabla_jobs, int job_id, int socket,
     }
 
     // Asignamos los recursos
-    if (strcmp(recurso, "cpu") == 0) job->cpu_usada += cantidad;
-    else if (strcmp(recurso, "gpu") == 0) job->gpu_usada += cantidad;
-    else if (strcmp(recurso, "mem") == 0) job->mem_usada += cantidad;
+    if (strcmp(recurso, RECURSO_CPU) == 0) job->cpu_usada += cantidad;
+    else if (strcmp(recurso, RECURSO_GPU) == 0) job->gpu_usada += cantidad;
+    else if (strcmp(recurso, RECURSO_MEM) == 0) job->mem_usada += cantidad;
 }
 
 int registrar_liberacion(TablaJobs tabla_jobs, int job_id, char* recurso, 
@@ -78,13 +79,13 @@ int registrar_liberacion(TablaJobs tabla_jobs, int job_id, char* recurso,
     if (job == NULL) return 0; // No existe el job
 
     int liberado = 0;
-    if (strcmp(recurso, "cpu") == 0) {
+    if (strcmp(recurso, RECURSO_CPU) == 0) {
         liberado = (cantidad > job->cpu_usada) ? job->cpu_usada : cantidad;
         job->cpu_usada -= liberado;
-    } else if (strcmp(recurso, "gpu") == 0) {
+    } else if (strcmp(recurso, RECURSO_GPU) == 0) {
         liberado = (cantidad > job->gpu_usada) ? job->gpu_usada : cantidad;
         job->gpu_usada -= liberado;
-    } else if (strcmp(recurso, "mem") == 0) {
+    } else if (strcmp(recurso, RECURSO_MEM) == 0) {
         liberado = (cantidad > job->mem_usada) ? job->mem_usada : cantidad;
         job->mem_usada -= liberado;
     } else {
@@ -168,7 +169,7 @@ void liberar_recursos_socket(TablaJobs tabla_jobs, int socket_caido,
     }
 
     // Disparamos los callbacks con el total acumulado.
-    if (total_cpu_liberada > 0) liberar_recurso_cb("cpu", total_cpu_liberada);
-    if (total_gpu_liberada > 0) liberar_recurso_cb("gpu", total_gpu_liberada);
-    if (total_mem_liberada > 0) liberar_recurso_cb("mem", total_mem_liberada);
+    if (total_cpu_liberada > 0) liberar_recurso_cb(RECURSO_CPU, total_cpu_liberada);
+    if (total_gpu_liberada > 0) liberar_recurso_cb(RECURSO_GPU, total_gpu_liberada);
+    if (total_mem_liberada > 0) liberar_recurso_cb(RECURSO_MEM, total_mem_liberada);
 }
