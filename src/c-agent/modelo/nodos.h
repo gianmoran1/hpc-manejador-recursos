@@ -14,32 +14,13 @@ typedef struct nodo_{
     int gpu;
     int mem;
     time_t ultimo_anuncio;
-    ClienteConectado *conexion; /* NULL = sin conexión activa */
+    ClienteConectado *conexion; // NULL = sin conexión activa
 } *Nodo;
 
 typedef struct tabla_nodos{
     TablaHash tabla;
     GList     lista;
 } *TablaNodos;
-
-/**
- * Crea una estructura de nodo, con conexion = NULL y ultimo_anuncio = ahora.
- */
-Nodo crear_nodo(char* ip, int puerto, int cpu, int gpu, int mem);
-
-/**
- * Agrega un nodo ya creado a la tabla (hash + lista). No verifica si ya
- * existía uno con la misma ip; para upsert usar procesar_anuncio.
- */
-void agregar_nodo(Nodo, TablaNodos);
-
-/**
- * Reinicia el timestamp ultimo_anuncio de un nodo a ahora.
- * Devuelve 1 si lo encontró, 0 en caso contrario.
- * NOTA: no tiene ningún llamador en el proyecto actualmente (procesar_anuncio
- * hace su propio upsert). Candidata a eliminar.
- */
-int reiniciar_timestamp(char* ip, int puerto, TablaNodos);
 
 /**
  * Crea y devuelve una tabla de nodos vacía.
@@ -53,6 +34,19 @@ TablaNodos crear_tabla_nodos();
  */
 void destruir_tabla_nodos(TablaNodos);
 
+/**
+ * Agrega un nodo a la tabla de nodos, si ya existe un nodo con esa ip+puerto, 
+ * actualiza sus recursos y renueva ultimo_anuncio; si no existe, lo crea y agrega.
+ */
+void nodos_procesar_anuncio(TablaNodos tabla_nodos, char* ip, int puerto,
+                            int cpu, int gpu, int mem);
+
+
+
+
+
+
+                            
 /**
  * Elimina los nodos que no han enviado un ANNOUNCE en los últimos 15
  * segundos. NO cierra ni libera la conexión TCP cacheada del nodo
@@ -69,22 +63,9 @@ void gestor_desconectar_nodos_timeout(TablaNodos tabla_nodos);
 char* get_nodes(TablaNodos tabla_nodos);
 
 /**
- * Busca un nodo por (ip, puerto). Devuelve 1 si lo encuentra, 0 si no.
- * NOTA: no tiene ningún llamador en el proyecto actualmente (todo el
- * código usa buscar_nodo_por_ip). Candidata a eliminar.
- */
-int buscar_nodo(char* ip, int puerto, TablaNodos tabla_nodos);
-
-/**
  * Busca un nodo solo por ip (ignora puerto). Devuelve el Nodo o NULL.
  */
 Nodo buscar_nodo_por_ip(char* ip, TablaNodos tabla_nodos);
-
-/**
- * Upsert de un anuncio: si ya existe un nodo con esa ip+puerto, actualiza
- * sus recursos y renueva ultimo_anuncio; si no existe, lo crea y agrega.
- */
-void procesar_anuncio(TablaNodos tabla_nodos, char* ip, int puerto, int cpu, int gpu, int mem);
 
 /**
  * Asocia una conexión ya establecida al nodo (ip, puerto), para poder

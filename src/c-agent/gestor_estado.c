@@ -11,6 +11,22 @@
 #include <stdio.h>
 #include <time.h>
 
+
+void gestor_procesar_anuncio(EstadoGlobal estado, char* ip, int puerto, int cpu, 
+                            int gpu, int mem) {
+    pthread_mutex_lock(&estado->lock);
+    nodos_procesar_anuncio(estado->registro_nodos, ip, puerto, cpu, gpu, mem);
+    pthread_mutex_unlock(&estado->lock);
+}
+
+void gestor_recursos_disponibles(EstadoGlobal estado, int *cpu, int *gpu, int *mem) {
+    pthread_mutex_lock(&estado->lock);
+    *cpu = estado->cpu->disponible;
+    *gpu = estado->gpu->disponible;
+    *mem = estado->mem->disponible;
+    pthread_mutex_unlock(&estado->lock);
+}
+
 // Callbacks para la Cola de pendientes de cada RecursoLocal
 
 static void* no_copia_solicitud(void* dato) { return dato; }
@@ -21,14 +37,6 @@ static RecursoLocal obtener_recurso(EstadoGlobal estado, char* nombre) {
     if (strcmp(nombre, RECURSO_GPU) == 0) return estado->gpu;
     if (strcmp(nombre, RECURSO_MEM) == 0) return estado->mem;
     return NULL;
-}
-
-void gestor_recursos_disponibles(EstadoGlobal estado, int *cpu, int *gpu, int *mem) {
-    pthread_mutex_lock(&estado->lock);
-    *cpu = estado->cpu->disponible;
-    *gpu = estado->gpu->disponible;
-    *mem = estado->mem->disponible;
-    pthread_mutex_unlock(&estado->lock);
 }
 
 int gestor_manejar_reserva(EstadoGlobal estado, char* nombre_recurso, int job_id, 
@@ -247,13 +255,6 @@ void gestor_eliminar_peticion(EstadoGlobal estado, int job_id) {
     struct peticionMulti_ busqueda;
     busqueda.job_id = job_id;
     tablahash_eliminar(estado->peticiones_pendientes, &busqueda);
-}
-
-void gestor_procesar_anuncio(EstadoGlobal estado, char* ip, int puerto, int cpu, 
-                            int gpu, int mem) {
-    pthread_mutex_lock(&estado->lock);
-    procesar_anuncio(estado->registro_nodos, ip, puerto, cpu, gpu, mem);
-    pthread_mutex_unlock(&estado->lock);
 }
 
 char* gestor_get_nodes(EstadoGlobal estado) {

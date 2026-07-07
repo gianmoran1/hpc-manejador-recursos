@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <sys/epoll.h>
+
 #include "config.h"
 #include "controlador.h"
 #include "servidor.h"      // globals del servidor: estado, usock_udp, timers
@@ -11,22 +13,22 @@
 #include "gestor_estado.h" // implementacion del gestor de recursos
 #include "modelo/peticiones.h" // PeticionMulti para rollback de JOB_REQUEST
 
+#define IP_BROADCAST "255.255.255.255"
+#define TAM_BUFFER_ANUNCIO 256
+
 EstadoGlobal estado = NULL;
 
-// Helpers estáticos de este módulo (definidos más abajo).
 static void procesar_mensaje_erlang(ClienteConectado *cliente, char* msg);
 static void erlang_get_nodes(ClienteConectado *cliente);
 static void erlang_job_request(ClienteConectado *cliente, int job_id, char* msg);
 static void erlang_job_release(int job_id);
 static void rollback_y_denegar(int job_id, int socket_erlang, int n_enviados);
-
 static void procesar_mensaje_red_c(ClienteConectado *cliente, char* msg);
 static void red_reserve(ClienteConectado *cliente, int job_id, char* recurso, int cant_res);
 static void red_granted(ClienteConectado *cliente, int job_id);
 static void red_denied(int job_id);
 static void red_release(int job_id, char* recurso, int cant_res);
-
-// -----------------------------------------------------------------------------
+static void notificar_timeout_peticion(PeticionMulti p);
 
 void controlador_anuncio_recibido(char* buffer_udp) {
     char ip_node[TAM_BUFFER_IP], cmd[32];
@@ -54,12 +56,7 @@ void controlador_anuncio_recibido(char* buffer_udp) {
     }
 }
 
-// -----------------------------------------------------------------------------
-
-void controlador_anuncio_recursos() {
-    uint64_t _expiraciones;
-    read(timer_anuncios_fd, &_expiraciones, sizeof(_expiraciones));
-
+void controlador_emitir_anuncio() {
     int disp_cpu, disp_gpu, disp_mem;
     gestor_recursos_disponibles(estado, &disp_cpu, &disp_gpu, &disp_mem);
 
@@ -67,6 +64,20 @@ void controlador_anuncio_recursos() {
     snprintf(msj, sizeof(msj), "ANNOUNCE %d cpu:%d gpu:%d mem:%d\n",
             PUERTO_TCP, disp_cpu, disp_gpu, disp_mem);
     enviar_mensaje_udp(usock_udp, IP_BROADCAST, PUERTO_UDP, msj);
+}
+
+void controlador_anuncio_recursos() {
+    uint64_t _expiraciones;
+    read(timer_anuncios_fd, &_expiraciones, sizeof(_expiraciones));
+    controlador_emitir_anuncio();
+}
+
+void controlador_timer_deadlock_y_desconexion() {
+    uint64_t _expiraciones;
+    read(timer_timeout, &_expiraciones, sizeof(_expiraciones));
+    gestor_expirar_pedidos(estado);
+    gestor_expirar_peticiones(estado, notificar_timeout_peticion);
+    gestor_desconectar_nodos(estado);
 }
 
 // -----------------------------------------------------------------------------
@@ -409,13 +420,4 @@ static void notificar_timeout_peticion(PeticionMulti p) {
     enviar_mensaje_tcp(p->socket_erlang, msj);
 }
 
-void controlador_timer() {
-    uint64_t _expiraciones;
-    read(timer_timeout, &_expiraciones, sizeof(_expiraciones));
-    // Higiene: desencola en silencio los RESERVE locales que quedaron vencidos.
-    gestor_expirar_pedidos(estado);
-    // Coordinador: expira las PeticionMulti sin completar → JOB_TIMEOUT + rollback.
-    gestor_expirar_peticiones(estado, notificar_timeout_peticion);
-    // Desconecta nodos sin ANNOUNCE reciente.
-    gestor_desconectar_nodos(estado);
-}
+

@@ -2,9 +2,13 @@
 #define __CLIENTE_H__
 
 #include "config.h"
+#include <pthread.h>
+
+#define TAM_BUFFER_SALIDA 8192
+
 
 /*
- * ClienteConectado — estado por socket de una conexión TCP activa.
+ * ClienteConectado - estado por socket de una conexión TCP activa.
  *
  * Es la capa de transporte del agente: agrupa el file descriptor con su buffer
  * de acumulación de bytes. El loop de epoll guarda un puntero a esta estructura
@@ -17,10 +21,17 @@
  * protección anti-DoS: un mensaje sin '\n' que llene el buffer corta la conexión.
  */
 typedef struct {
-    int fd;                         // El socket del cliente
-    int es_erlang;                  // 1 si es el socket local de Erlang, 0 si es un socket de red C
-    char buffer[TAM_BUFFER_MENSAJE];// Buffer donde acumulamos los bytes hasta formar un mensaje
-    int bytes_leidos;               // Cuántos bytes válidos hay acumulados en 'buffer'
+    // El socket del cliente.
+    int fd;
+    int es_erlang;
+    // Buffer donde acumulamos los bytes hasta formar un mensaje recibido.
+    char buffer[TAM_BUFFER_MENSAJE];
+    // Cuántos bytes válidos hay acumulados en 'buffer'.
+    int bytes_leidos;
+    // Buffer donde almacenamos los mensajes para enviar.
+    char buffer_salida[TAM_BUFFER_SALIDA];
+    int bytes_salida;
+    pthread_mutex_t lock_salida;
 } ClienteConectado;
 
 /*
@@ -31,6 +42,9 @@ typedef struct {
  */
 ClienteConectado* crear_cliente_conectado(int fd, int es_erlang);
 
+/*
+ * Libera la memoria pedida por el cliente. 
+ */
 void destruir_cliente(ClienteConectado* cliente);
 
 #endif /* __CLIENTE_H__ */

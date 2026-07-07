@@ -54,9 +54,9 @@ Elimina los objetos de `build/`, el binario de `bin/` y los `.beam` de Erlang.
 bin/        Binario compilado del agente C
 build/      Archivos objeto intermedios (.o)
 docs/       Documentación del proyecto
-include/    Cabeceras compartidas (.hrl)
+include/    Cabeceras públicas del agente C (config.h, servidor.h, gestor_estado.h, red/…) + config.hrl de Erlang
 src/
-  c-agent/            Agente C (fuentes y cabeceras)
+  c-agent/            Agente C (fuentes .c y cabeceras internas)
   erlang-scheduler/   Scheduler Erlang (.erl y .beam)
 test/       Scripts de prueba
 ```

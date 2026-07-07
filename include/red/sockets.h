@@ -1,26 +1,6 @@
 #ifndef __SOCKETS_H__
 #define __SOCKETS_H__
 
-#define _GNU_SOURCE
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <string.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netinet/ip.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <sys/mman.h>
-#include <sys/wait.h>
-#include <pthread.h>
-#include <sys/epoll.h>
-#include <signal.h>
-#include <arpa/inet.h>
-#include <sys/timerfd.h> /* Para timerfd_create */
-#include <time.h>
-#include <errno.h>
 #include "red/cliente.h"
 
 /*
@@ -64,14 +44,6 @@ int mk_udp_lsock(int port);
 int mk_timer(int segundos);
 
 /*
- * Intenta establecer una conexión TCP no bloqueante con un nodo remoto.
- * Utiliza select() internamente para manejar un timeout máximo de 2 segundos.
- * Recibe la dirección IP y el puerto TCP del nodo remoto.
- * Devuelve el file descriptor conectado en caso de éxito, o -1 si falló.
- */
-int conectar_a_nodo(const char *ip_destino, int puerto_destino);
-
-/*
  * Drena todos los datos disponibles en el socket TCP hasta vaciarlo.
  * Acumula los datos en el buffer interno del cliente. Incluye protección Anti-DoS.
  * Recibe un puntero al cliente del cual se leerán los datos.
@@ -87,18 +59,19 @@ int atender_cliente_tcp(ClienteConectado *cliente);
 int atender_cliente_udp(int usock_udp, char *buffer_destino, size_t tamano_maximo);
 
 /*
- * Envía de forma segura una cadena de texto a través de un socket TCP conectado.
- * Recibe el file descriptor de destino y la cadena de texto a enviar.
- * Devuelve 1 si el mensaje se envió correctamente, o -1 si el socket estaba caído.
- */
-int enviar_mensaje_tcp(int fd, const char *mensaje);
-
-/*
  * Envía un datagrama UDP a un destino específico.
  * Recibe el FD del socket UDP, la IP de destino (ej. "255.255.255.255"),
  * el puerto y la cadena de texto a enviar.
  * Devuelve 1 si el envío a la red fue exitoso, o -1 en caso de error.
  */
 int enviar_mensaje_udp(int usock_udp, const char *ip_destino, int puerto_destino, const char *mensaje);
+
+/*
+ * Intenta establecer una conexión TCP no bloqueante con un nodo remoto.
+ * Utiliza select() internamente para manejar un timeout máximo de 2 segundos.
+ * Recibe la dirección IP y el puerto TCP del nodo remoto.
+ * Devuelve el file descriptor conectado en caso de éxito, o -1 si falló.
+ */
+int conectar_a_nodo(const char *ip_destino, int puerto_destino);
 
 #endif /* __SOCKETS_H__ */

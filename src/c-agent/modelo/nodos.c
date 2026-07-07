@@ -5,13 +5,16 @@
 #include <string.h>
 #include <unistd.h>
 
-static Nodo nodo_copiar(Nodo nodo){
+#define TIEMPO_VIDA_NODO        15.0 // sin ANNOUNCE en este lapso, el nodo se desconecta
+
+// Callbacks para la tabla de nodos.
+
+static Nodo nodo_no_copiar(Nodo nodo){
     return nodo;
 }
 
-// nodo->conexion es una referencia débil: el ClienteConectado es propiedad del
-// loop de epoll. Por eso acá NO se hace close()/free() de la conexión; hacerlo
-// competiría con el epoll despachando ese fd desde otro hilo (use-after-free).
+// La funcion no destruye ClienteConectado, ya que de eso se encarga el servido
+// en la parte de epoll.
 static void nodo_destruir(Nodo nodo){
     free(nodo);
 }
@@ -34,11 +37,39 @@ static unsigned nodo_hash(Nodo a){
     return hashval;
 }
 
+/**
+ * Crea una estructura de nodo, con conexion = NULL y ultimo_anuncio = ahora.
+ */
+static Nodo crear_nodo(char* ip, int puerto, int cpu, int gpu, int mem){
+    Nodo nodo = malloc(sizeof (struct nodo_));
+    strncpy(nodo->ip, ip, (sizeof (nodo->ip) -1));
+    nodo->ip[sizeof(nodo->ip) - 1] = '\0';
+    nodo->puerto = puerto;
+    nodo->cpu = cpu;
+    nodo->gpu = gpu;
+    nodo->mem = mem;
+    nodo->ultimo_anuncio = time(NULL);
+    nodo->conexion = NULL;
+    return nodo;
+}
+
+/**
+ * Agrega un nodo ya creado a la tabla (hash + lista). No verifica si ya
+ * existía uno con la misma ip.
+ */
+static void agregar_nodo(Nodo nodo, TablaNodos tabla_nodos){ 
+    tablahash_insertar(tabla_nodos->tabla, nodo);
+    tabla_nodos->lista = glist_agregar_inicio(tabla_nodos->lista, nodo, (
+                                                FuncionCopia)nodo_no_copiar);
+}
+
+//------------------------------------------------------------------------------
+
 TablaNodos crear_tabla_nodos(){
     TablaNodos tabla_nodos = malloc(sizeof(struct tabla_nodos));
     assert(tabla_nodos);
     tabla_nodos->tabla = tablahash_crear(TAM_INICIAL_TABLA_HASH, 
-                                (FuncionCopia)nodo_copiar, 
+                                (FuncionCopia)nodo_no_copiar, 
                                 (FuncionComparadora) nodo_comparar, 
                                 (FuncionDestructora) nodo_destruir,
                                 (FuncionHash) nodo_hash);
@@ -52,41 +83,32 @@ void destruir_tabla_nodos(TablaNodos tabla_nodos){
     free(tabla_nodos);
 }
 
-Nodo crear_nodo(char* ip, int puerto, int cpu, int gpu, int mem){
-    Nodo nodo = malloc(sizeof (struct nodo_));
-    strncpy(nodo->ip, ip, (sizeof (nodo->ip) -1));
-    nodo->ip[sizeof(nodo->ip) - 1] = '\0';
-    nodo->puerto = puerto;
-    nodo->cpu = cpu;
-    nodo->gpu = gpu;
-    nodo->mem = mem;
-    nodo->ultimo_anuncio = time(NULL);
-    nodo->conexion = NULL;
-    return nodo;
-}
+void nodos_procesar_anuncio(TablaNodos tabla_nodos, char* ip, int puerto, int cpu, 
+                        int gpu, int mem) {
+    // Crea un nodo de busqueda
+    struct nodo_ busqueda; // Es local no hace falta liberarlo
+    strncpy(busqueda.ip, ip, (sizeof(busqueda.ip) - 1));
+    busqueda.ip[sizeof(busqueda.ip) - 1] = '\0';
+    busqueda.puerto = puerto;
 
-void agregar_nodo(Nodo nodo, TablaNodos tabla_nodos){ 
-    tablahash_insertar(tabla_nodos->tabla, nodo);
-    tabla_nodos->lista = glist_agregar_inicio(tabla_nodos->lista, nodo, (
-                                                FuncionCopia)nodo_copiar);
-}
+    Nodo encontrado = tablahash_buscar(tabla_nodos->tabla, &busqueda);
 
-int reiniciar_timestamp(char* ip, int puerto, TablaNodos tabla_nodos){ 
-    // Creamos nodo de busqueda (podria ser local)
-    Nodo nodoBusqueda = malloc(sizeof(struct nodo_));
-    strncpy(nodoBusqueda->ip, ip, (sizeof (nodoBusqueda->ip) -1));
-    nodoBusqueda->ip[sizeof(nodoBusqueda->ip) - 1] = '\0'; 
-    nodoBusqueda->puerto = puerto;
-    Nodo nodo = tablahash_buscar(tabla_nodos->tabla, nodoBusqueda); 
-
-    if (nodo != NULL){ // Si lo encontramos reiniciamos el timestamp
-        nodo->ultimo_anuncio = time(NULL);
-        free(nodoBusqueda);
-        return 1;
+    if (encontrado) { // Si el nodo ya esta lo actualizo
+        encontrado->ultimo_anuncio = time(NULL);
+        encontrado->cpu = cpu;
+        encontrado->gpu = gpu;
+        encontrado->mem = mem;
+    } else {
+        Nodo nuevo = crear_nodo(ip, puerto, cpu, gpu, mem);
+        agregar_nodo(nuevo, tabla_nodos);
     }
-    free(nodoBusqueda); // Liberamos el nodo de busqueda
-    return 0;
 }
+
+
+
+
+
+
 
 void gestor_desconectar_nodos_timeout(TablaNodos tabla_nodos){
     GList temp = tabla_nodos->lista;
@@ -125,27 +147,6 @@ void gestor_desconectar_nodos_timeout(TablaNodos tabla_nodos){
     }
 }
 
-void procesar_anuncio(TablaNodos tabla_nodos, char* ip, int puerto, int cpu, 
-                        int gpu, int mem) {
-    // Crea un nodo de busqueda
-    struct nodo_ busqueda; // Es local no hace falta liberarlo
-    strncpy(busqueda.ip, ip, (sizeof(busqueda.ip) - 1));
-    busqueda.ip[sizeof(busqueda.ip) - 1] = '\0';
-    busqueda.puerto = puerto;
-
-    Nodo encontrado = tablahash_buscar(tabla_nodos->tabla, &busqueda);
-
-    if (encontrado) {
-        encontrado->ultimo_anuncio = time(NULL);
-        encontrado->cpu = cpu;
-        encontrado->gpu = gpu;
-        encontrado->mem = mem;
-    } else {
-        Nodo nuevo = crear_nodo(ip, puerto, cpu, gpu, mem);
-        agregar_nodo(nuevo, tabla_nodos);
-    }
-}
-
 char* get_nodes(TablaNodos tabla_nodos) {
     int capacidad_actual = 2048;
     char* buffer = malloc(capacidad_actual);
@@ -180,16 +181,6 @@ char* get_nodes(TablaNodos tabla_nodos) {
     }
     strcat(buffer, "\n");
     return buffer;
-}
-
-int buscar_nodo(char* ip, int puerto, TablaNodos tabla_nodos){
-    struct nodo_ busqueda;
-    strncpy(busqueda.ip, ip, (sizeof(busqueda.ip) - 1));
-    busqueda.ip[sizeof(busqueda.ip) - 1] = '\0';
-    busqueda.puerto = puerto;
-
-    Nodo encontrado = tablahash_buscar(tabla_nodos->tabla, &busqueda);
-    return encontrado != NULL;
 }
 
 Nodo buscar_nodo_por_ip(char* ip, TablaNodos tabla_nodos) {

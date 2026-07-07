@@ -127,6 +127,10 @@ el gestor y el modelo, sin sockets).
 - **`inet_addr(ip)`** no se valida: ante una IP mal formada devuelve
   `INADDR_NONE` (0xFFFFFFFF) sin avisar. Hoy la IP viene de `getsockname`, así
   que no se dispara, pero es un `bind` a una dirección basura latente.
+- **`atender_cliente_udp` no filtra el eco propio**: el agente recibe y procesa
+  su propio `ANNOUNCE` (se observó en la corrida: `ANNOUNCE recibido: <mi_ip>`).
+  Impacto nulo (se re-registra a sí mismo, cosa que ya hace al arrancar), pero
+  `docs/arquitectura.md` supone que se descarta por IP propia y no es así.
 
 ---
 

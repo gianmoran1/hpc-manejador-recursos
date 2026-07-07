@@ -4,8 +4,16 @@
 #include "modelo/peticiones.h"
 #include "modelo/estado.h"
 
-/* Escribe en *cpu, *gpu y *mem las unidades actualmente disponibles de cada
- * recurso local. Toma el lock internamente. */
+/*
+ * Agrega un nodo dado a la tabla de nodos. 
+ */
+void gestor_procesar_anuncio(EstadoGlobal estado, char* ip, int puerto, int cpu, 
+                            int gpu, int mem);
+
+/* 
+ * Escribe en *cpu, *gpu y *mem las unidades actualmente disponibles de cada
+ * recurso local.
+ */
 void gestor_recursos_disponibles(EstadoGlobal estado, int *cpu, int *gpu, int *mem);
 
 /*RESERVE <job_id> <recurso> <cantidad>*/
@@ -32,9 +40,6 @@ void gestor_expirar_peticiones(EstadoGlobal estado, void (*cb_timeout)(PeticionM
 
 /*maneja la desconexión de un socket, liberando todos los recursos asociados a ese socket y avisando a los clientes afectados */
 void manejar_desconexion_socket(EstadoGlobal estado, int socket_caido, void (*avisar_red)(int, int));
-
-/*procesa un anuncio de nodo (annunce) ANNOUNCE <puerto> <recursos>*/
-void gestor_procesar_anuncio(EstadoGlobal estado, char* ip, int puerto, int cpu, int gpu, int mem);
 
 /*obtiene la lista de nodos registrados (GET_NODES) NODES IP:Puerto:cpu:X...
 SE DEBE HACER FREE SOBRE EL PUNTERO DEVUELTO*/

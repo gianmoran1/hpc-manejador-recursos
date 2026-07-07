@@ -1,6 +1,28 @@
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/ip.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
+#include <sys/wait.h>
+#include <pthread.h>
+#include <sys/epoll.h>
+#include <signal.h>
+#include <arpa/inet.h>
+#include <sys/timerfd.h> 
+#include <time.h>
+#include <errno.h>
+
 #include "red/sockets.h"
 #include "config.h"
 
+#define BACKLOG_TCP  10
 #define IP_PARA_OBTENER_IP_LOCAL "8.8.8.8"
 #define PUERTO_PARA_OBTENER_IP_LOCAL 53
 
@@ -55,8 +77,7 @@ int mk_tcp_lsock(int port, const char* ip) {
         quit("socket TCP");
 
     // setsockopt configura una opción del socket.
-    // SO_REUSEADDR permite volver a bindear el puerto de inmediato tras cerrar el
-    // agente, sin esperar el TIME_WAIT del kernel (clave para reiniciar rápido).
+    // SO_REUSEADDR permite volver a bindear el puerto de inmediato.
     int yes = 1;
     if (setsockopt(lsock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes) < 0)
         quit("setsockopt TCP");
@@ -71,9 +92,7 @@ int mk_tcp_lsock(int port, const char* ip) {
         quit("bind TCP");
 
     // El backlog es el largo máximo de la cola de conexiones ya establecidas 
-    // que esperan un accept(). Si entran más de
-    // BACKLOG_TCP a la vez antes de aceptarlas, el kernel puede rechazar las
-    // extra.
+    // que esperan un accept().
     if (listen(lsock, BACKLOG_TCP) < 0)
         quit("listen TCP");
 
@@ -127,8 +146,7 @@ int mk_timer(int segundos) {
     return tfd;
 }
 
-// Devuelve 1 si hay un mensaje listo en 'buffer_destino', o 0 si no hay nada 
-// o no nos interesa porque es nuestro mensaje.
+// Devuelve 1 si hay un mensaje listo en 'buffer_destino', o 0 si no hay nada.
 int atender_cliente_udp(int usock_udp, char *buffer_destino, size_t tamano_maximo) {
     char buffer_red[512];
     struct sockaddr_in src_addr;
@@ -169,8 +187,6 @@ int enviar_mensaje_udp(int usock_udp, const char *ip_destino,
         return -1;
     }
 
-    // Como es UDP, no sabemos si el otro lo recibió, solo sabemos que salió de 
-    // nuestra placa de red.
     return 1;
 }
 
@@ -257,17 +273,7 @@ int conectar_a_nodo(const char *ip_destino, int puerto_destino) {
             return -1;
         }
     }
-    printf("[CONEXIONES] Conexión establecida exitosamente con %s en el FD %d\n", 
-            ip_destino, sockfd);
 
     return sockfd;
 }
 
-// Envía un mensaje a un cliente ya conectado. Devuelve 1 si se envió bien, o 
-/// -1 si hubo un error (socket caído, etc).
-int enviar_mensaje_tcp(int fd, const char *mensaje) {
-    ssize_t enviados = send(fd, mensaje, strlen(mensaje), 0);
-    if (enviados <= 0) // Socket roto o caido.
-        return -1;
-    return 1;
-}

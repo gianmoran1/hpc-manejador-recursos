@@ -66,12 +66,18 @@ cuando el padre debe sobrevivir al hijo.
 
 ## 5. Estrategia anti-deadlock: timeout + backoff aleatorio
 
-El agente C detecta el deadlock mediante `timerfd` (dispara cada 15 s): si una reserva lleva más de 30 s encolada, la descarta y envía `DENIED` al agente coordinador. Ese coordinador hace rollback y envía `JOB_DENIED` a Erlang.
+El agente C detecta el deadlock mediante `timerfd` (dispara cada 15 s) en dos planos: el **dueño**
+del recurso desencola en silencio los `RESERVE` que llevan más de 30 s encolados (higiene de cola),
+y el **coordinador** expira su `PeticionMulti` si el job no se completó en 30 s, hace rollback
+(`RELEASE` a todos sus nodos) y avisa `JOB_TIMEOUT` a Erlang. No hay mensaje de timeout entre
+agentes: el coordinador lo detecta por sí mismo.
 
 El worker Erlang reacciona según el tipo de mensaje:
 
-- `{denied, JobId}` (path actual): loguea `[DENIED]` y finaliza el job sin reintentar.
-- `{timeout, JobId}` (path de backoff): loguea `[TIMEOUT]`, espera `rand:uniform(3000)` ms y reintenta. Este path se activa solo si el agente C envía `JOB_TIMEOUT` directamente a Erlang; con la implementación actual el timeout se encamina como `DENIED` al coordinador y llega como `JOB_DENIED`.
+- `{denied, JobId}`: loguea `[DENIED]` y **finaliza el job sin reintentar** (rechazo permanente: el
+  nodo no puede dar ese recurso ni reintentando).
+- `{timeout, JobId}`: loguea `[TIMEOUT]`, espera `rand:uniform(?MAX_RANDOM_ESPERA)` ms y **reintenta**.
+  Es el path que rompe el deadlock, alimentado por el `JOB_TIMEOUT` del coordinador.
 
 **Por qué el backoff sería aleatorio:** si dos jobs en deadlock esperaran el mismo tiempo
 fijo, volverían a colisionar. La aleatoriedad rompe la simetría — con alta probabilidad
