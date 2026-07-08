@@ -1,36 +1,20 @@
-#include "jobs.h"
-#include "config.h"
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
 #include <assert.h>
 
-static void* job_no_copia(void* dato) {
-    return dato;
-}
+#include "jobs.h"
+#include "config.h"
 
-static void job_destruir(void* dato) {
-    free(dato);
-}
-
-static int job_comparar(void* dato1, void* dato2) {
-    return (((JobActivo)dato1)->job_id - ((JobActivo)dato2)->job_id);
-}
-
-static unsigned job_hash(void* dato) {
-    return (unsigned)((JobActivo)dato)->job_id;
-}
-
-// No-op a propósito: lista y tabla hash comparten los mismos punteros JobActivo.
-// La dueña de esa memoria es la tabla hash; si este destructor de la lista
-// liberara el JobActivo sería un double free.
-static void no_destruye_job(__attribute__((unused)) void* dato) {
-}
+static void* job_no_copia(void* dato);
+static void job_destruir(void* dato);
+static int job_comparar(void* dato1, void* dato2);
+static unsigned job_hash(void* dato);
+static void no_destruye_job(void* dato);
 
 TablaJobs crear_tabla_jobs() {
     TablaJobs tj = malloc(sizeof(struct tablaJobs_));
     assert(tj);
-    tj->tabla = tablahash_crear(TAM_INICIAL_TABLA_HASH, job_no_copia, 
+    tj->tabla = tablahash_crear(TAM_INICIAL_TABLA_HASH, job_no_copia,
         job_comparar, job_destruir, job_hash);
     tj->lista = glist_crear();
     return tj;
@@ -42,7 +26,7 @@ void destruir_tabla_jobs(TablaJobs tabla_jobs) {
     free(tabla_jobs);
 }
 
-void registrar_asignacion(TablaJobs tabla_jobs, int job_id, int socket, 
+void registrar_asignacion(TablaJobs tabla_jobs, int job_id, int socket,
                             char* recurso, int cantidad) {
     struct jobActivo_ busqueda;
     busqueda.job_id = job_id;
@@ -60,7 +44,7 @@ void registrar_asignacion(TablaJobs tabla_jobs, int job_id, int socket,
         job->mem_usada = 0;
 
         tablahash_insertar(tabla_jobs->tabla, job);
-        tabla_jobs->lista = glist_agregar_inicio(tabla_jobs->lista, job, 
+        tabla_jobs->lista = glist_agregar_inicio(tabla_jobs->lista, job,
                                                 job_no_copia);
     }
 
@@ -70,7 +54,7 @@ void registrar_asignacion(TablaJobs tabla_jobs, int job_id, int socket,
     else if (strcmp(recurso, RECURSO_MEM) == 0) job->mem_usada += cantidad;
 }
 
-int registrar_liberacion(TablaJobs tabla_jobs, int job_id, char* recurso, 
+int registrar_liberacion(TablaJobs tabla_jobs, int job_id, char* recurso,
                         int cantidad) {
     struct jobActivo_ busqueda;
     busqueda.job_id = job_id;
@@ -119,7 +103,7 @@ int registrar_liberacion(TablaJobs tabla_jobs, int job_id, char* recurso,
     return liberado;
 }
 
-void liberar_recursos_socket(TablaJobs tabla_jobs, int socket_caido, 
+void liberar_recursos_socket(TablaJobs tabla_jobs, int socket_caido,
                                 void (*liberar_recurso_cb)(char*, int)) {
     GList temp = tabla_jobs->lista;
     if (temp == NULL) return;
@@ -172,4 +156,28 @@ void liberar_recursos_socket(TablaJobs tabla_jobs, int socket_caido,
     if (total_cpu_liberada > 0) liberar_recurso_cb(RECURSO_CPU, total_cpu_liberada);
     if (total_gpu_liberada > 0) liberar_recurso_cb(RECURSO_GPU, total_gpu_liberada);
     if (total_mem_liberada > 0) liberar_recurso_cb(RECURSO_MEM, total_mem_liberada);
+}
+
+// Callbacks para la TablaHash y la GList de jobs.
+
+static void* job_no_copia(void* dato) {
+    return dato;
+}
+
+static void job_destruir(void* dato) {
+    free(dato);
+}
+
+static int job_comparar(void* dato1, void* dato2) {
+    return (((JobActivo)dato1)->job_id - ((JobActivo)dato2)->job_id);
+}
+
+static unsigned job_hash(void* dato) {
+    return (unsigned)((JobActivo)dato)->job_id;
+}
+
+// No-op a propósito: lista y tabla hash comparten los mismos punteros JobActivo.
+// La dueña de esa memoria es la tabla hash; si este destructor de la lista
+// liberara el JobActivo sería un double free.
+static void no_destruye_job(__attribute__((unused)) void* dato) {
 }

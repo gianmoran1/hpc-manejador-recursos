@@ -1,7 +1,8 @@
-#include "peticiones.h"
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+
+#include "peticiones.h"
 
 PeticionMulti peticion_crear(int job_id, int socket_erlang, int total) {
     PeticionMulti p  = malloc(sizeof(struct peticionMulti_));
@@ -20,8 +21,4 @@ NodoReserva* peticion_buscar_nodo_por_fd(PeticionMulti p, int fd) {
         if (p->nodos[i].fd_remoto == fd && p->nodos[i].grantado == 0) 
             return &p->nodos[i];
     return NULL;
-}
-
-void peticion_destruir(PeticionMulti p) {
-    free(p);
 }

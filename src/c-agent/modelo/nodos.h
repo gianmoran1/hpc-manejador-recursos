@@ -41,12 +41,6 @@ void destruir_tabla_nodos(TablaNodos);
 void nodos_procesar_anuncio(TablaNodos tabla_nodos, char* ip, int puerto,
                             int cpu, int gpu, int mem);
 
-
-
-
-
-
-                            
 /**
  * Elimina los nodos que no han enviado un ANNOUNCE en los últimos 15
  * segundos. NO cierra ni libera la conexión TCP cacheada del nodo

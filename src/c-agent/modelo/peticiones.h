@@ -1,13 +1,15 @@
 #ifndef __PETICIONES_H__
 #define __PETICIONES_H__
 
+#include "config.h"
+
 #include <time.h>
 
 #define MAX_NODOS_PETICION 16
 
 typedef struct nodoReserva_ {
     int fd_remoto;
-    char recurso[32];
+    char recurso[TAM_NOMBRE_RECURSO];
     int cantidad;
     int grantado;  /* 0 = pendiente, 1 = GRANTED recibido */
 } NodoReserva;
@@ -34,10 +36,5 @@ PeticionMulti peticion_crear(int job_id, int socket_erlang, int total);
  * NodoReserva o NULL si no está.
  */
 NodoReserva* peticion_buscar_nodo_por_fd(PeticionMulti p, int fd);
-
-/**
- * Libera la memoria de la petición.
- */
-void peticion_destruir(PeticionMulti p);
 
 #endif /* __PETICIONES_H__ */

@@ -1,11 +1,10 @@
-#include "recursos.h"
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
 
-static void destruir_solicitud(void* dato) {
-    free(dato);
-}
+#include "recursos.h"
+
+static void destruir_solicitud(void* dato);
 
 RecursoLocal recurso_crear(char* nombre, int capacidad) {
     RecursoLocal rec = malloc(sizeof(struct recursoLocal_));
@@ -21,4 +20,8 @@ RecursoLocal recurso_crear(char* nombre, int capacidad) {
 void recurso_destruir(RecursoLocal rec) {
     cola_destruir(rec->pendientes, (FuncionDestructora)destruir_solicitud);
     free(rec);
+}
+
+static void destruir_solicitud(void* dato) {
+    free(dato);
 }

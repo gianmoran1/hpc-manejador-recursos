@@ -1,22 +1,13 @@
+#include <stdlib.h>
+#include <assert.h>
+
 #include "estado.h"
 #include "config.h"
 #include "peticiones.h"
 
-#include <stdlib.h>
-#include <assert.h>
-
-// Callbacks para la TablaHash de peticiones multi-recurso.
-
-static void* no_copia_peticion(void* dato) { return dato; }
-
-static int peticion_comparar(void* dato1, void* dato2) {
-  return ((PeticionMulti)dato1)->job_id - ((PeticionMulti)dato2)->job_id;
-}
-
-// Hash de una petición: su propio job_id.
-static unsigned peticion_hash(void* dato) {
-  return (unsigned)((PeticionMulti)dato)->job_id;
-}
+static void* no_copia_peticion(void* dato);
+static int peticion_comparar(void* dato1, void* dato2);
+static unsigned peticion_hash(void* dato);
 
 EstadoGlobal estado_crear(int cap_cpu, int cap_gpu, int cap_mem) {
   EstadoGlobal e = malloc(sizeof(struct estadoGlobal_));
@@ -41,4 +32,17 @@ void estado_destruir(EstadoGlobal estado) {
   destruir_tabla_nodos(estado->registro_nodos);
   tablahash_destruir(estado->peticiones_pendientes);
   free(estado);
+}
+
+// Callbacks para la TablaHash de peticiones multi-recurso.
+
+static void* no_copia_peticion(void* dato) { return dato; }
+
+static int peticion_comparar(void* dato1, void* dato2) {
+  return ((PeticionMulti)dato1)->job_id - ((PeticionMulti)dato2)->job_id;
+}
+
+// Hash de una petición: su propio job_id.
+static unsigned peticion_hash(void* dato) {
+  return (unsigned)((PeticionMulti)dato)->job_id;
 }

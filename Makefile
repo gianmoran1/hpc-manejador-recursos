@@ -14,7 +14,7 @@ OBJS = $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.o, $(SRCS))
 
 .PHONY: all erlang run valgrind test clean
 
-# ── Compilación C ──────────────────────────────────────────────────────────────
+# Compilación C
 all: $(BUILD_DIR) $(BIN_DIR) $(TARGET)
 
 $(TARGET): $(OBJS)
@@ -30,22 +30,22 @@ $(BUILD_DIR):
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
 
-# ── Compilación Erlang ─────────────────────────────────────────────────────────
+# Compilación Erlang
 erlang:
 	cd $(ERL_DIR) && erlc -I../../include $(ERL_SRCS)
 
-# ── Ejecución ──────────────────────────────────────────────────────────────────
+# Ejecución
 run: all
 	./$(TARGET)
 
 valgrind: all
 	valgrind -s --leak-check=full --track-origins=yes --show-leak-kinds=all ./$(TARGET)
 
-# ── Tests ──────────────────────────────────────────────────────────────────────
+# Tests
 test:
 	bash test/test_deadlock_simple.sh
 
-# ── Limpieza ───────────────────────────────────────────────────────────────────
+# Limpieza
 clean:
 	rm -rf $(BUILD_DIR)
 	rm -f $(TARGET)

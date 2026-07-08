@@ -16,9 +16,7 @@
 #define CAP_CPU 4
 #define CAP_GPU 1
 #define CAP_MEM 8192
-
 #define NUM_HILOS 4
-
 #define INTERVALO_ANUNCIO 5          // Cada cuánto se emite un ANNOUNCE.
 #define INTERVALO_MANTENIMIENTO 15   // Cada cuánto se expiran pedidos y nodos.
 #define TIEMPO_DESCUBRIMIENTO 2

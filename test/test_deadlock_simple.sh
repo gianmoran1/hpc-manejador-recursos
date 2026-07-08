@@ -82,7 +82,7 @@ int main(void) {
 
     /* ── Paso 4: liberar Job 9000 y reintentar ── */
     printf("\n--- Paso 4: Job 9000 liberado, Job 1001 reintenta ---\n");
-    gestor_liberar_job(estado, 9000, cb_granted);
+    gestor_manejar_release(estado, "gpu", 9000, 1, cb_granted);
     assert_true(estado->gpu->disponible == 1, "GPU libre tras release de Job 9000");
 
     r = gestor_manejar_reserva(estado, "gpu", 1001, 10, 1);
@@ -133,7 +133,7 @@ int main(void) {
                 "Nodo B: pedido de job 500 desencolado por timeout");
 
     /* Rollback: el agente recibe el DENIED/TIMEOUT y libera lo ya grantado en Nodo A */
-    gestor_liberar_job(nodo_a, 500, cb_granted);
+    gestor_manejar_release(nodo_a, "cpu", 500, 2, cb_granted);
     assert_true(nodo_a->cpu->disponible == 4, "Rollback exitoso: Nodo A cpu vuelve a 4");
     assert_true(nodo_b->gpu->disponible == 0, "Nodo B: gpu sigue ocupada por job 8000");
 
@@ -176,7 +176,6 @@ int main(void) {
      *   Se libera 1 cpu → disponible=2, pero 21 necesita 2 → ¡ahora puede servirse!
      *   22 queda aún esperando.                                                   */
     printf("\n--- Borde 5: FIFO estricto (no se salta la fila) ---\n");
-    int ultimo_granted_local = -1;
     /* reusar cb_granted registra en ultimo_granted_job */
     gestor_manejar_reserva(e, "cpu", 20, 5, 3); /* 4-3=1 disponible */
     int r21 = gestor_manejar_reserva(e, "cpu", 21, 6, 2); /* encola */
@@ -194,7 +193,7 @@ int main(void) {
     /* ── Borde 6: release de job inexistente es no-op ── */
     printf("\n--- Borde 6: release de job inexistente ---\n");
     int cpu_antes = e->cpu->disponible;
-    gestor_liberar_job(e, 9999, cb_granted); /* job 9999 nunca existió */
+    gestor_manejar_release(e, "cpu", 9999, 1, cb_granted); /* job 9999 nunca existió */
     assert_true(e->cpu->disponible == cpu_antes,
                 "release de job inexistente no altera los recursos");
 
@@ -205,9 +204,9 @@ int main(void) {
     gestor_manejar_reserva(e2, "cpu", 77, 10, 3); /* mismo job, mismo recurso */
     assert_true(e2->cpu->disponible == 3,
                 "doble RESERVE acumula: 8-2-3=3 disponibles");
-    gestor_liberar_job(e2, 77, NULL); /* liberar ambas asignaciones */
+    gestor_manejar_release(e2, "cpu", 77, 5, NULL); /* liberar todo lo acumulado */
     assert_true(e2->cpu->disponible == 8,
-                "liberar_job libera el total acumulado (cpu vuelve a 8)");
+                "release del total acumulado (cpu vuelve a 8)");
     estado_destruir(e2);
 
     estado_destruir(e);
@@ -247,6 +246,37 @@ int main(void) {
     assert_true(ultimo_timeout_peticion == -1, "Peticion completa NO se expira aunque sea vieja");
     estado_destruir(coord2);
 
+    /* =================================================================
+     * ESCENARIO 5: Liberación por desconexión abrupta
+     * Un socket que se cae libera todos los recursos de sus jobs y
+     * reparte a los pedidos que estaban encolados.
+     * ================================================================= */
+    printf("\n=== Escenario 5: Liberación por desconexión abrupta ===\n\n");
+
+    EstadoGlobal ez = estado_crear(4, 1, 0);
+
+    /* Job 100 (socket 42) toma toda la cpu */
+    gestor_manejar_reserva(ez, "cpu", 100, 42, 4);
+    assert_true(ez->cpu->disponible == 0,
+                "Socket 42: job 100 toma cpu:4 -> cpu disponible = 0");
+
+    /* Job 300 (socket 77) pide cpu:2 -> encola (no hay cpu) */
+    int r300 = gestor_manejar_reserva(ez, "cpu", 300, 77, 2);
+    assert_true(r300 == 0 && !cola_es_vacia(ez->cpu->pendientes),
+                "Socket 77: job 300 pide cpu:2 -> encolado");
+
+    /* Se cae el socket 42: libera lo de job 100 y reparte a la cola */
+    ultimo_granted_job = -1;
+    manejar_desconexion_socket(ez, 42, cb_granted);
+    assert_true(ez->cpu->disponible == 2,
+                "Desconexión del socket 42 liberó cpu:4 y asignó cpu:2 al job 300 (disponible = 2)");
+    assert_true(ultimo_granted_job == 300,
+                "El job 300 encolado se sirvió al liberarse los recursos");
+    assert_true(cola_es_vacia(ez->cpu->pendientes),
+                "Cola cpu vacía tras repartir");
+
+    estado_destruir(ez);
+
     printf("\nPasados: %d  |  Fallidos: %d\n", pass, fail);
     printf(fail == 0 ? "TODOS LOS TESTS PASARON\n" : "ALGUNOS TESTS FALLARON\n");
     return fail > 0 ? 1 : 0;
@@ -254,7 +284,7 @@ int main(void) {
 CTEST
 
 SRCS="gestor_estado.c modelo/estado.c modelo/recursos.c modelo/jobs.c modelo/nodos.c modelo/peticiones.c estructuras/tablahash.c estructuras/glist.c estructuras/cola.c"
-gcc -g -I"$SRC/../../include" -I"$SRC" "$BUILD/test_deadlock.c" \
+gcc -Wall -Wextra -g -I"$SRC/../../include" -I"$SRC" "$BUILD/test_deadlock.c" \
     $(for f in $SRCS; do echo "$SRC/$f"; done) \
     -lpthread -o "$BUILD/test_deadlock" 2>"$BUILD/err.log" \
     && ok "test_deadlock compilado" \

@@ -1,10 +1,10 @@
 #ifndef __RECURSOS_H__
 #define __RECURSOS_H__
 
-#include "estructuras/cola.h"
 #include <time.h>
 
-#define TAM_NOMBRE_RECURSO 10
+#include "estructuras/cola.h"
+#include "config.h"
 
 typedef struct solicitudPendiente_{
     int job_id;

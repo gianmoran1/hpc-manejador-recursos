@@ -9,16 +9,6 @@
 #include <arpa/inet.h>
 #include <sys/epoll.h>
 #include <pthread.h>
-#include <poll.h>
-#include <time.h>
-#include <sys/types.h>
-#include <netinet/ip.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <sys/mman.h>
-#include <sys/wait.h>
-#include <signal.h>
-#include <sys/timerfd.h> 
 #include <errno.h>
 
 #include "servidor.h"
@@ -34,15 +24,138 @@ int epoll_fd;
 int lsock_publico;
 int lsock_local;
 int usock_udp;
-int erlang_socket = -1;
 int timer_anuncios_fd;
 int timer_timeout;
 char mi_ip_publica[TAM_BUFFER_IP];
 ClienteConectado *clientes_por_fd[TAM_MAX_TABLA_FD];
 pthread_mutex_t lock_tabla_fd = PTHREAD_MUTEX_INITIALIZER;
 
+static void servidor_rearmar_cliente(ClienteConectado *cliente);
+static void servidor_desconectar_cliente(ClienteConectado *cliente);
+static void servidor_gestion_cliente(ClienteConectado *cliente);
+static int servidor_drenar_salida(ClienteConectado *cliente);
+static ClienteConectado* servidor_cliente_por_fd(int fd);
+static void servidor_armar_epollout(ClienteConectado *cliente);
 static void servidor_aceptar_cliente(int fd_listo);
 static void servidor_gestion_anuncio_recibido();
+
+void servidor_descubrimiento_inicial(int sec) {
+    controlador_emitir_anuncio();
+    sleep(sec);
+}
+
+void servidor_agregar_cliente_en_epoll(ClienteConectado *cliente, int flags) {
+    struct epoll_event ev;
+    ev.events = flags;
+    ev.data.ptr = cliente;
+
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cliente->fd, &ev) == -1) {
+        perror("Error al agregar cliente al epoll");
+        close(cliente->fd);
+        exit(EXIT_FAILURE);
+    }
+
+    // Registro el cliente en la tabla de clientes indexados por el fd.
+    if (cliente->fd >= 0 && cliente->fd < TAM_MAX_TABLA_FD) {
+        pthread_mutex_lock(&lock_tabla_fd);
+        clientes_por_fd[cliente->fd] = cliente;
+        pthread_mutex_unlock(&lock_tabla_fd);
+    }
+}
+
+void* servidor_bucle_principal(void* args) {
+    (void)args;
+    struct epoll_event eventos[MAX_EVENTS];
+
+    while(1) {
+        // El hilo se duerme acá hasta que el epoll le avise de algo.
+        int nfds = epoll_wait(epoll_fd, eventos, MAX_EVENTS, -1);
+        if (nfds == -1) {
+            perror("epoll_wait");
+            exit(EXIT_FAILURE);
+        }
+
+        for (int n = 0; n < nfds; n++) {
+            ClienteConectado *entidad = (ClienteConectado *) eventos[n].data.ptr;
+            int fd_listo = entidad->fd;
+
+            // Socket de escucha: hay una nueva conexión queriendo entrar.
+            if ((fd_listo == lsock_publico) || (fd_listo == lsock_local))
+                servidor_aceptar_cliente(fd_listo);
+            // UDP: algún nodo se está anunciando con un ANNOUNCE.
+            else if (fd_listo == usock_udp)
+                servidor_gestion_anuncio_recibido();
+            else if (fd_listo == timer_anuncios_fd)
+                controlador_anuncio_recursos();
+            else if (fd_listo == timer_timeout)
+                controlador_timer_deadlock_y_desconexion();
+
+            // Cliente ya conectado: el evento puede traer EPOLLIN (algo para leer),
+            // EPOLLOUT (hay lugar para drenar la salida pendiente), o error.
+            else {
+                ClienteConectado *cliente = (ClienteConectado *) eventos[n].data.ptr;
+                unsigned ev = eventos[n].events;
+
+                if (ev & (EPOLLHUP | EPOLLERR)) {
+                    servidor_desconectar_cliente(cliente);
+                    continue;
+                }
+                // Drenamos primero (libera espacio); si el drenado desconectó, no leemos.
+                if (ev & EPOLLOUT) {
+                    if (!servidor_drenar_salida(cliente))
+                        continue;
+                }
+                if (ev & EPOLLIN)
+                    servidor_gestion_cliente(cliente);
+            }
+        }
+    }
+    return NULL;
+}
+
+int enviar_mensaje_tcp(int fd, const char *mensaje) {
+    ClienteConectado *cliente = servidor_cliente_por_fd(fd);
+    size_t largo = strlen(mensaje);
+
+    // Fd sin cliente en el mapa (socket de escucha/timer, o ya cerrado): envío directo.
+    if (cliente == NULL)
+        return send(fd, mensaje, largo, MSG_NOSIGNAL) > 0 ? 1 : -1;
+
+    pthread_mutex_lock(&cliente->lock_salida);
+
+    size_t enviado = 0;
+    // Solo intentamos mandar directo si NO hay nada encolado (para no romper el
+    // orden: lo que ya está en el buffer tiene que salir primero).
+    if (cliente->bytes_salida == 0) {
+        ssize_t n = send(fd, mensaje, largo, MSG_NOSIGNAL);
+        if (n > 0) {
+            enviado = (size_t)n;
+        } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+            pthread_mutex_unlock(&cliente->lock_salida);
+            return -1;  // socket roto de verdad
+        }
+        // n < 0 con EAGAIN → 'enviado' queda en 0: se buffea todo.
+        if (enviado == largo) {                         // entró todo
+            pthread_mutex_unlock(&cliente->lock_salida);
+            return 1;                                    // no hace falta EPOLLOUT
+        }
+    }
+
+    // Quedó un remanente (parcial/EAGAIN, o ya había cola): al buffer de salida.
+    size_t restante = largo - enviado;
+    if (cliente->bytes_salida + restante > sizeof(cliente->buffer_salida)) {
+        // El peer no drena y el buffer se llenó → backpressure sostenido: cortamos.
+        pthread_mutex_unlock(&cliente->lock_salida);
+        return -1;
+    }
+    memcpy(cliente->buffer_salida + cliente->bytes_salida, mensaje + enviado, restante);
+    cliente->bytes_salida += restante;
+
+    servidor_armar_epollout(cliente);  // que el epoll nos avise cuando haya lugar
+
+    pthread_mutex_unlock(&cliente->lock_salida);
+    return 1;
+}
 
 // Re-armado final del cliente en el epoll: recalcula la máscara (EPOLLIN siempre
 // + EPOLLOUT si quedó salida pendiente) y hace el MOD, TODO bajo lock_salida, para
@@ -137,132 +250,6 @@ static void servidor_armar_epollout(ClienteConectado *cliente) {
     epoll_ctl(epoll_fd, EPOLL_CTL_MOD, cliente->fd, &ev);  // si falla (fd cerrándose), se ignora
 }
 
-//------------------------------------------------------------------------------
-
-void servidor_descubrimiento_inicial(int sec) {
-    controlador_emitir_anuncio();
-    sleep(sec);
-}
-
-void servidor_agregar_cliente_en_epoll(ClienteConectado *cliente, int flags) {
-    struct epoll_event ev;
-    ev.events = flags;
-    ev.data.ptr = cliente;
-
-    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, cliente->fd, &ev) == -1) {
-        perror("Error al agregar cliente al epoll");
-        close(cliente->fd);
-        exit(EXIT_FAILURE);
-    }
-
-    // Registro el cliente en la tabla de clientes indexados por el fd.
-    if (cliente->fd >= 0 && cliente->fd < TAM_MAX_TABLA_FD) { 
-        pthread_mutex_lock(&lock_tabla_fd);
-        clientes_por_fd[cliente->fd] = cliente;
-        pthread_mutex_unlock(&lock_tabla_fd);
-    }
-}
-
-void* servidor_bucle_principal(void* args) {
-    (void)args;
-    struct epoll_event eventos[MAX_EVENTS];
-
-    while(1) {
-        // El hilo se duerme acá hasta que el epoll le avise de algo.
-        int nfds = epoll_wait(epoll_fd, eventos, MAX_EVENTS, -1);
-        if (nfds == -1) {
-            perror("epoll_wait");
-            exit(EXIT_FAILURE);
-        }
-
-        for (int n = 0; n < nfds; n++) {
-            ClienteConectado *entidad = (ClienteConectado *) eventos[n].data.ptr;
-            int fd_listo = entidad->fd;
-
-            // Socket de escucha: hay una nueva conexión queriendo entrar.
-            if ((fd_listo == lsock_publico) || (fd_listo == lsock_local))
-                servidor_aceptar_cliente(fd_listo);
-            // UDP: algún nodo se está anunciando con un ANNOUNCE.
-            else if (fd_listo == usock_udp)
-                servidor_gestion_anuncio_recibido();
-            else if (fd_listo == timer_anuncios_fd)
-                controlador_anuncio_recursos();
-            else if (fd_listo == timer_timeout)
-                controlador_timer_deadlock_y_desconexion();
-
-            // Cliente ya conectado: el evento puede traer EPOLLIN (algo para leer),
-            // EPOLLOUT (hay lugar para drenar la salida pendiente), o error.
-            else {
-                ClienteConectado *cliente = (ClienteConectado *) eventos[n].data.ptr;
-                unsigned ev = eventos[n].events;
-
-                if (ev & (EPOLLHUP | EPOLLERR)) {
-                    servidor_desconectar_cliente(cliente);
-                    continue;
-                }
-                // Drenamos primero (libera espacio); si el drenado desconectó, no leemos.
-                if (ev & EPOLLOUT) {
-                    if (!servidor_drenar_salida(cliente))
-                        continue;
-                }
-                if (ev & EPOLLIN)
-                    servidor_gestion_cliente(cliente);
-            }
-        }
-    }
-    return NULL;
-}
-
-// Envía 'mensaje' al fd. Si el kernel no lo acepta entero (EAGAIN por buffer de
-// envío lleno, o envío parcial), guarda el remanente en el buffer de salida del
-// cliente y arma EPOLLOUT para drenarlo cuando haya lugar.
-// Mantiene la firma (fd, msg): los ~30 call sites no cambian.
-int enviar_mensaje_tcp(int fd, const char *mensaje) {
-    ClienteConectado *cliente = servidor_cliente_por_fd(fd);  // lookup del mapa (Fase 2)
-    size_t largo = strlen(mensaje);
-
-    // Fd sin cliente en el mapa (socket de escucha/timer, o ya cerrado): envío directo.
-    if (cliente == NULL)   
-        return send(fd, mensaje, largo, MSG_NOSIGNAL) > 0 ? 1 : -1;
-
-    pthread_mutex_lock(&cliente->lock_salida);
-
-    size_t enviado = 0;
-    // Solo intentamos mandar directo si NO hay nada encolado (para no romper el
-    // orden: lo que ya está en el buffer tiene que salir primero).
-    if (cliente->bytes_salida == 0) {
-        ssize_t n = send(fd, mensaje, largo, MSG_NOSIGNAL);
-        if (n > 0) {
-            enviado = (size_t)n;
-        } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-            pthread_mutex_unlock(&cliente->lock_salida);
-            return -1;  // socket roto de verdad
-        }
-        // n < 0 con EAGAIN → 'enviado' queda en 0: se buffea todo.
-        if (enviado == largo) {                         // entró todo
-            pthread_mutex_unlock(&cliente->lock_salida);
-            return 1;                                    // no hace falta EPOLLOUT
-        }
-    }
-
-    // Quedó un remanente (parcial/EAGAIN, o ya había cola): al buffer de salida.
-    size_t restante = largo - enviado;
-    if (cliente->bytes_salida + restante > sizeof(cliente->buffer_salida)) {
-        // El peer no drena y el buffer se llenó → backpressure sostenido: cortamos.
-        pthread_mutex_unlock(&cliente->lock_salida);
-                return -1;
-    }
-    memcpy(cliente->buffer_salida + cliente->bytes_salida, mensaje + enviado, restante);
-    cliente->bytes_salida += restante;
-
-    servidor_armar_epollout(cliente);  // que el epoll nos avise cuando haya lugar
-
-    pthread_mutex_unlock(&cliente->lock_salida);
-    return 1;
-}
-
-// Funciones privadas
-
 static void servidor_aceptar_cliente(int fd_listo) {
     struct sockaddr_in cliente_addr;
     socklen_t cliente_len = sizeof(cliente_addr);
@@ -281,17 +268,16 @@ static void servidor_aceptar_cliente(int fd_listo) {
         crear_cliente_conectado(conn_sock, (fd_listo == lsock_local) ? 1 : 0);
     servidor_agregar_cliente_en_epoll(clienteNuevo, EPOLLIN | EPOLLONESHOT);
 
-    if (fd_listo == lsock_local) {
-        erlang_socket = conn_sock;
+    if (fd_listo == lsock_local)
         printf("[CONEXIONES] Nueva conexión local aceptada para Erlang (FD asignado: %d)\n", conn_sock);
-    } else
+    else
         printf("[CONEXIONES] Nueva conexión de red aceptada (FD asignado: %d)\n", conn_sock);
 }
 
 static void servidor_gestion_anuncio_recibido() {
     char buffer_udp[TAM_BUFFER_UDP];
     int valido = atender_cliente_udp(usock_udp, buffer_udp, sizeof(buffer_udp));
-    if (!valido) 
+    if (!valido)
         return;
     printf("[CONEXIONES] ANNOUNCE UDP recibido: %s\n", buffer_udp);
     controlador_anuncio_recibido(buffer_udp);

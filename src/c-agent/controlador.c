@@ -15,6 +15,9 @@
 
 #define IP_BROADCAST "255.255.255.255"
 #define TAM_BUFFER_ANUNCIO 256
+#define TAM_CMD 32     // comando del protocolo (JOB_REQUEST, GET_NODES, RESERVE, ...)
+#define TAM_MSJ 128    // mensaje de protocolo a enviar por TCP
+#define TAM_TOKEN 128  // token suelto al parsear ("@IP:recurso:cant" o "recurso:valor")
 
 EstadoGlobal estado = NULL;
 
@@ -31,7 +34,7 @@ static void red_release(int job_id, char* recurso, int cant_res);
 static void notificar_timeout_peticion(PeticionMulti p);
 
 void controlador_anuncio_recibido(char* buffer_udp) {
-    char ip_node[TAM_BUFFER_IP], cmd[32];
+    char ip_node[TAM_BUFFER_IP], cmd[TAM_CMD];
     int puerto_node = 0, cpu = 0, gpu = 0, mem = 0;
     int n = sscanf(buffer_udp, "%49s %31s %d", ip_node, cmd, &puerto_node);
     if (n == 3 && strcmp(cmd, "ANNOUNCE") == 0) {
@@ -41,10 +44,10 @@ void controlador_anuncio_recibido(char* buffer_udp) {
             while (*ptr && *ptr != ' ') ptr++;
             while (*ptr == ' ') ptr++;
         }
-        char tok[64];
-        while (sscanf(ptr, "%63s", tok) == 1) {
-            char res[16]; int val;
-            if (sscanf(tok, "%15[^:]:%d", res, &val) == 2) {
+        char tok[TAM_TOKEN];
+        while (sscanf(ptr, "%127s", tok) == 1) {
+            char res[TAM_NOMBRE_RECURSO]; int val;
+            if (sscanf(tok, "%9[^:]:%d", res, &val) == 2) {
                 if      (strcmp(res, RECURSO_CPU) == 0) cpu = val;
                 else if (strcmp(res, RECURSO_GPU) == 0) gpu = val;
                 else if (strcmp(res, RECURSO_MEM) == 0) mem = val;
@@ -80,22 +83,10 @@ void controlador_timer_deadlock_y_desconexion() {
     gestor_desconectar_nodos(estado);
 }
 
-// -----------------------------------------------------------------------------
-
 void controlador_desconexion_cliente(int cliente_fd) {
     manejar_desconexion_socket(estado, cliente_fd, callback_granted_red);
     gestor_limpiar_conexion_por_fd(estado, cliente_fd);
 }
-
-// Callback C-C: notifica a un nodo coordinador que su RESERVE encolado fue concedido.
-// Usa "GRANTED" (protocolo C-C), no "JOB_GRANTED" (que es solo para Erlang).
-void callback_granted_red(int job_id, int socket_fd) {
-    char msj[64];
-    snprintf(msj, sizeof(msj), "GRANTED %d\n", job_id);
-    enviar_mensaje_tcp(socket_fd, msj);
-}
-
-// -----------------------------------------------------------------------------
 
 void controlador_mensaje_cliente(ClienteConectado *cliente) {
     char *salto_linea;
@@ -120,10 +111,20 @@ void controlador_mensaje_cliente(ClienteConectado *cliente) {
     }
 }
 
+// Callback C-C: notifica a un nodo coordinador que su RESERVE encolado fue concedido.
+// Usa "GRANTED" (protocolo C-C), no "JOB_GRANTED" (que es solo para Erlang).
+void callback_granted_red(int job_id, int socket_fd) {
+    char msj[TAM_MSJ];
+    snprintf(msj, sizeof(msj), "GRANTED %d\n", job_id);
+    enviar_mensaje_tcp(socket_fd, msj);
+}
+
+// Despacho de mensajes de Erlang (conexión local).
+
 static void procesar_mensaje_erlang(ClienteConectado *cliente, char* msg) {
-    char comando[32];
+    char comando[TAM_CMD];
     int job_id = -1;
-    char recursos[128];
+    char recursos[TAM_TOKEN];
     int parseados = sscanf(msg, "%31s %d %127s", comando, &job_id, recursos);
     if (parseados < 1)
         return;
@@ -150,7 +151,7 @@ static void erlang_get_nodes(ClienteConectado *cliente) {
 // Conecta a cada nodo destino y le manda un RESERVE; ante cualquier fallo hace
 // rollback de lo ya enviado y devuelve JOB_DENIED.
 static void erlang_job_request(ClienteConectado *cliente, int job_id, char* msg) {
-    char recursos[128] = {0};
+    char recursos[TAM_TOKEN] = {0};
     sscanf(msg, "%*s %*d %127s", recursos);
     printf("[CONTROLADOR] Erlang pide RECURSOS: %s para el trabajo %d\n", recursos, job_id);
 
@@ -165,7 +166,7 @@ static void erlang_job_request(ClienteConectado *cliente, int job_id, char* msg)
     int total = 0;
     {
         const char *tmp = cursor;
-        char tok[128];
+        char tok[TAM_TOKEN];
         while (sscanf(tmp, "%127s", tok) == 1) {
             if (tok[0] == '@') total++;
             while (*tmp && *tmp != ' ') tmp++;
@@ -173,7 +174,7 @@ static void erlang_job_request(ClienteConectado *cliente, int job_id, char* msg)
         }
     }
     if (total == 0 || total > MAX_NODOS_PETICION) {
-        char msj[64];
+        char msj[TAM_MSJ];
         snprintf(msj, sizeof(msj), "JOB_DENIED %d\n", job_id);
         enviar_mensaje_tcp(cliente->fd, msj);
         return;
@@ -185,12 +186,12 @@ static void erlang_job_request(ClienteConectado *cliente, int job_id, char* msg)
 
     // Conectar y enviar RESERVE a cada nodo
     int idx = 0;
-    char token[128];
+    char token[TAM_TOKEN];
     while (sscanf(cursor, "%127s", token) == 1) {
-        char ip_destino[TAM_BUFFER_IP], nombre_recurso[32];
+        char ip_destino[TAM_BUFFER_IP], nombre_recurso[TAM_NOMBRE_RECURSO];
         int cantidad;
 
-        if (sscanf(token, "@%49[^:]:%31[^:]:%d",
+        if (sscanf(token, "@%49[^:]:%9[^:]:%d",
                    ip_destino, nombre_recurso, &cantidad) != 3) {
             rollback_y_denegar(job_id, cliente->fd, idx);
             return;
@@ -226,7 +227,7 @@ static void erlang_job_request(ClienteConectado *cliente, int job_id, char* msg)
         idx++;
         pthread_mutex_unlock(&estado->lock);
 
-        char msj_red[128];
+        char msj_red[TAM_MSJ];
         snprintf(msj_red, sizeof(msj_red), "RESERVE %d %s %d\n",
                  job_id, nombre_recurso, cantidad);
         enviar_mensaje_tcp(fd_destino, msj_red);
@@ -239,16 +240,16 @@ static void erlang_job_request(ClienteConectado *cliente, int job_id, char* msg)
 // Erlang avisa que el trabajo terminó: manda RELEASE a todos los nodos remotos de
 // la peticion y la destruye.
 static void erlang_job_release(int job_id) {
-    int fds[MAX_NODOS_PETICION]; 
-    char recursos_jb[MAX_NODOS_PETICION][32]; 
+    int fds[MAX_NODOS_PETICION];
+    char recursos_jb[MAX_NODOS_PETICION][TAM_NOMBRE_RECURSO];
     int cantidades_jb[MAX_NODOS_PETICION]; int n = 0;
     pthread_mutex_lock(&estado->lock);
     PeticionMulti p = gestor_buscar_peticion(estado, job_id);
     if (p) {
         for (int i = 0; i < p->total; i++) {
             fds[n] = p->nodos[i].fd_remoto;
-            strncpy(recursos_jb[n], p->nodos[i].recurso, 31);
-            recursos_jb[n][31] = '\0';
+            strncpy(recursos_jb[n], p->nodos[i].recurso, TAM_NOMBRE_RECURSO - 1);
+            recursos_jb[n][TAM_NOMBRE_RECURSO - 1] = '\0';
             cantidades_jb[n] = p->nodos[i].cantidad;
             n++;
         }
@@ -257,17 +258,17 @@ static void erlang_job_release(int job_id) {
     pthread_mutex_unlock(&estado->lock);
 
     for (int i = 0; i < n; i++) {
-        char msj[64];
-        snprintf(msj, sizeof(msj), "RELEASE %d %s %d\n", job_id, recursos_jb[i], 
+        char msj[TAM_MSJ];
+        snprintf(msj, sizeof(msj), "RELEASE %d %s %d\n", job_id, recursos_jb[i],
                 cantidades_jb[i]);
         enviar_mensaje_tcp(fds[i], msj);
     }
 }
 
-// Helper: cancela todos los RESERVE ya enviados y notifica JOB_DENIED.
+// Cancela todos los RESERVE ya enviados y notifica JOB_DENIED.
 // Debe llamarse sin tener el lock tomado.
 static void rollback_y_denegar(int job_id, int socket_erlang, int n_enviados) {
-    int fds[MAX_NODOS_PETICION]; char recursos_rb[MAX_NODOS_PETICION][32]; 
+    int fds[MAX_NODOS_PETICION]; char recursos_rb[MAX_NODOS_PETICION][TAM_NOMBRE_RECURSO];
     int cantidades_rb[MAX_NODOS_PETICION];
     int n = 0;
 
@@ -276,8 +277,8 @@ static void rollback_y_denegar(int job_id, int socket_erlang, int n_enviados) {
     if (p) {
         for (int i = 0; i < n_enviados; i++) {
             fds[n] = p->nodos[i].fd_remoto;
-            strncpy(recursos_rb[n], p->nodos[i].recurso, 31);
-            recursos_rb[n][31] = '\0';
+            strncpy(recursos_rb[n], p->nodos[i].recurso, TAM_NOMBRE_RECURSO - 1);
+            recursos_rb[n][TAM_NOMBRE_RECURSO - 1] = '\0';
             cantidades_rb[n] = p->nodos[i].cantidad;
             n++;
         }
@@ -286,21 +287,23 @@ static void rollback_y_denegar(int job_id, int socket_erlang, int n_enviados) {
     pthread_mutex_unlock(&estado->lock);
 
     for (int i = 0; i < n; i++) {
-        char msj[64];
+        char msj[TAM_MSJ];
         snprintf(msj, sizeof(msj), "RELEASE %d %s %d\n", job_id, recursos_rb[i], cantidades_rb[i]);
         enviar_mensaje_tcp(fds[i], msj);
     }
-    char msj[64];
+    char msj[TAM_MSJ];
     snprintf(msj, sizeof(msj), "JOB_DENIED %d\n", job_id);
     enviar_mensaje_tcp(socket_erlang, msj);
 }
 
+// Despacho de mensajes de otros agentes C (protocolo C-C).
+
 static void procesar_mensaje_red_c(ClienteConectado *cliente, char* msg) {
-    char comando[32];
+    char comando[TAM_CMD];
     int job_id = -1;
-    char recurso[32];
+    char recurso[TAM_NOMBRE_RECURSO];
     int cant_res = 0;
-    int parseados = sscanf(msg, "%31s %d %31s %d", comando, &job_id, recurso, &cant_res);
+    int parseados = sscanf(msg, "%31s %d %9s %d", comando, &job_id, recurso, &cant_res);
     if (parseados < 1)
         return;
 
@@ -320,11 +323,11 @@ static void red_reserve(ClienteConectado *cliente, int job_id, char* recurso, in
             cliente->fd, recurso, cant_res, job_id);
     int resultado = gestor_manejar_reserva(estado, recurso, job_id, cliente->fd, cant_res);
     if (resultado == 1) {
-        char rsp[64];
+        char rsp[TAM_MSJ];
         snprintf(rsp, sizeof(rsp), "GRANTED %d\n", job_id);
         enviar_mensaje_tcp(cliente->fd, rsp);
     } else if (resultado == -1) {
-        char rsp[64];
+        char rsp[TAM_MSJ];
         snprintf(rsp, sizeof(rsp), "DENIED %d\n", job_id);
         enviar_mensaje_tcp(cliente->fd, rsp);
     }
@@ -343,7 +346,7 @@ static void red_granted(ClienteConectado *cliente, int job_id) {
         NodoReserva *nr = peticion_buscar_nodo_por_fd(p, cliente->fd);
         if (nr) {
             nr->grantado = 1;
-            p->respondidos++;        
+            p->respondidos++;
             if (p->respondidos == p->total) {
                 enviar_granted = 1;
                 skt_erlang = p->socket_erlang;
@@ -354,7 +357,7 @@ static void red_granted(ClienteConectado *cliente, int job_id) {
     pthread_mutex_unlock(&estado->lock);
 
     if (enviar_granted) {
-        char msj[64];
+        char msj[TAM_MSJ];
         snprintf(msj, sizeof(msj), "JOB_GRANTED %d\n", job_id);
         enviar_mensaje_tcp(skt_erlang, msj);
     }
@@ -366,7 +369,7 @@ static void red_denied(int job_id) {
     printf("[CONTROLADOR] Reserva rechazada por otro nodo para el trabajo %d.\n", job_id);
 
     int fds[MAX_NODOS_PETICION];
-    char recursos_dn[MAX_NODOS_PETICION][32];
+    char recursos_dn[MAX_NODOS_PETICION][TAM_NOMBRE_RECURSO];
     int cantidades_dn[MAX_NODOS_PETICION];
     int n = 0, skt_erlang = -1;
 
@@ -375,8 +378,8 @@ static void red_denied(int job_id) {
     if (p) {
         for (int i = 0; i < p->total; i++) {
             fds[n] = p->nodos[i].fd_remoto;
-            strncpy(recursos_dn[n], p->nodos[i].recurso, 31);
-            recursos_dn[n][31] = '\0';
+            strncpy(recursos_dn[n], p->nodos[i].recurso, TAM_NOMBRE_RECURSO - 1);
+            recursos_dn[n][TAM_NOMBRE_RECURSO - 1] = '\0';
             cantidades_dn[n] = p->nodos[i].cantidad;
             n++;
         }
@@ -386,12 +389,12 @@ static void red_denied(int job_id) {
     pthread_mutex_unlock(&estado->lock);
 
     for (int i = 0; i < n; i++) {
-        char msj[64];
+        char msj[TAM_MSJ];
         snprintf(msj, sizeof(msj), "RELEASE %d %s %d\n", job_id, recursos_dn[i], cantidades_dn[i]);
         enviar_mensaje_tcp(fds[i], msj);
     }
     if (skt_erlang != -1) {
-        char msj[64];
+        char msj[TAM_MSJ];
         snprintf(msj, sizeof(msj), "JOB_DENIED %d\n", job_id);
         enviar_mensaje_tcp(skt_erlang, msj);
     }
@@ -403,21 +406,17 @@ static void red_release(int job_id, char* recurso, int cant_res) {
     gestor_manejar_release(estado, recurso, job_id, cant_res, callback_granted_red);
 }
 
-//------------------------------------------------------------------------------
-
 // Callback de timeout del lado coordinador: la PeticionMulti venció sin
 // completarse. Manda RELEASE a todos sus nodos (rollback) y JOB_TIMEOUT a su
 // Erlang para que reintente. Se invoca con estado->lock tomado (desde el gestor).
 static void notificar_timeout_peticion(PeticionMulti p) {
     for (int i = 0; i < p->total; i++) {
-        char msj[64];
+        char msj[TAM_MSJ];
         snprintf(msj, sizeof(msj), "RELEASE %d %s %d\n",
                  p->job_id, p->nodos[i].recurso, p->nodos[i].cantidad);
         enviar_mensaje_tcp(p->nodos[i].fd_remoto, msj);
     }
-    char msj[64];
+    char msj[TAM_MSJ];
     snprintf(msj, sizeof(msj), "JOB_TIMEOUT %d\n", p->job_id);
     enviar_mensaje_tcp(p->socket_erlang, msj);
 }
-
-

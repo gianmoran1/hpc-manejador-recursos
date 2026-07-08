@@ -1,11 +1,11 @@
 #ifndef __CLIENTE_H__
 #define __CLIENTE_H__
 
-#include "config.h"
 #include <pthread.h>
 
-#define TAM_BUFFER_SALIDA 8192
+#include "config.h"
 
+#define TAM_BUFFER_SALIDA 8192
 
 /*
  * ClienteConectado - estado por socket de una conexión TCP activa.

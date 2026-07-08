@@ -11,6 +11,7 @@
 
 #define TAM_BUFFER_IP 50
 #define TAM_BUFFER_MENSAJE 1024  // Buffer de acumulación por cliente TCP
+#define TAM_NOMBRE_RECURSO 10
 
 #define PUERTO_TCP 4040
 #define PUERTO_UDP 12529
