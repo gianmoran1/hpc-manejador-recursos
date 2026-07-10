@@ -40,7 +40,7 @@ void nodos_procesar_anuncio(TablaNodos tabla_nodos, char* ip, int puerto, int cp
     struct nodo_ busqueda; // Es local no hace falta liberarlo
     strncpy(busqueda.ip, ip, (sizeof(busqueda.ip) - 1));
     busqueda.ip[sizeof(busqueda.ip) - 1] = '\0';
-    busqueda.puerto = puerto;
+    
 
     Nodo encontrado = tablahash_buscar(tabla_nodos->tabla, &busqueda);
 
@@ -137,8 +137,8 @@ Nodo buscar_nodo_por_ip(char* ip, TablaNodos tabla_nodos) {
     return encontrado;
 }
 
-void nodo_registrar_conexion(char* ip, int puerto, ClienteConectado* cliente, TablaNodos tabla_nodos) {
-    Nodo n = buscar_nodo_ptr(ip, puerto, tabla_nodos);
+void nodo_registrar_conexion(char* ip, ClienteConectado* cliente, TablaNodos tabla_nodos) {
+    Nodo n = buscar_nodo_por_ip(ip, tabla_nodos);
     if (n != NULL) n->conexion = cliente;
 }
 
@@ -206,11 +206,4 @@ static void agregar_nodo(Nodo nodo, TablaNodos tabla_nodos){
                                                 FuncionCopia)nodo_no_copiar);
 }
 
-// Devuelve el puntero al nodo por ip+puerto, o NULL.
-static Nodo buscar_nodo_ptr(char* ip, int puerto, TablaNodos tabla_nodos) {
-    struct nodo_ busqueda;
-    strncpy(busqueda.ip, ip, sizeof(busqueda.ip) - 1);
-    busqueda.ip[sizeof(busqueda.ip) - 1] = '\0';
-    busqueda.puerto = puerto;
-    return (Nodo)tablahash_buscar(tabla_nodos->tabla, &busqueda);
-}
+

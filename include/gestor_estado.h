@@ -89,7 +89,7 @@ int gestor_obtener_destino(EstadoGlobal estado, char* ip, int* puerto_out, int* 
 /*
  * Cachea una conexión saliente ya establecida para el nodo (ip, puerto).
  */
-void gestor_registrar_conexion(EstadoGlobal estado, char* ip, int puerto,
+void gestor_registrar_conexion(EstadoGlobal estado, char* ip,
     ClienteConectado* cliente);
 
 /*

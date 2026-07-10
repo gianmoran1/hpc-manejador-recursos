@@ -185,9 +185,9 @@ int gestor_obtener_destino(EstadoGlobal estado, char* ip, int* puerto_out, int* 
     return encontrado;
 }
 
-void gestor_registrar_conexion(EstadoGlobal estado, char* ip, int puerto, ClienteConectado* cliente) {
+void gestor_registrar_conexion(EstadoGlobal estado, char* ip, ClienteConectado* cliente) {
     pthread_mutex_lock(&estado->lock);
-    nodo_registrar_conexion(ip, puerto, cliente, estado->registro_nodos);
+    nodo_registrar_conexion(ip, cliente, estado->registro_nodos);
     pthread_mutex_unlock(&estado->lock);
 }
 

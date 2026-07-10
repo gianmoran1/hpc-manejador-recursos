@@ -66,7 +66,7 @@ Nodo buscar_nodo_por_ip(char* ip, TablaNodos tabla_nodos);
  * reutilizarla en el próximo RESERVE hacia ese mismo nodo. No-op si el nodo
  * no está en la tabla. Debe llamarse bajo lock (usar gestor_registrar_conexion).
  */
-void nodo_registrar_conexion(char* ip, int puerto, ClienteConectado* cliente, TablaNodos tabla_nodos);
+void nodo_registrar_conexion(char* ip, ClienteConectado* cliente, TablaNodos tabla_nodos);
 
 /**
  * Busca por fd el nodo que tiene esa conexión cacheada y le pone

@@ -215,7 +215,7 @@ static void erlang_job_request(ClienteConectado *cliente, int job_id, char* msg)
             }
             ClienteConectado *nueva = crear_cliente_conectado(fd_destino, 0);
             servidor_agregar_cliente_en_epoll(nueva, EPOLLIN | EPOLLONESHOT);
-            gestor_registrar_conexion(estado, ip_destino, puerto_destino, nueva);
+            gestor_registrar_conexion(estado, ip_destino, nueva);
         }
 
         pthread_mutex_lock(&estado->lock);
