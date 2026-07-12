@@ -169,11 +169,16 @@ static void job_destruir(void* dato) {
 }
 
 static int job_comparar(void* dato1, void* dato2) {
-    return (((JobActivo)dato1)->job_id - ((JobActivo)dato2)->job_id);
+    JobActivo a = (JobActivo)dato1;
+    JobActivo b = (JobActivo)dato2;
+    if (a->job_id < b->job_id) return -1;
+    if (a->job_id > b->job_id) return 1;
+    return a->socket_origen - b->socket_origen;
 }
 
 static unsigned job_hash(void* dato) {
-    return (unsigned)((JobActivo)dato)->job_id;
+    JobActivo j = (JobActivo)dato;
+    return (unsigned)j->job_id ^ (unsigned)j->socket_origen;
 }
 
 // No-op a propósito: lista y tabla hash comparten los mismos punteros JobActivo.
