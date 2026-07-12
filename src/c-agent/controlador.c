@@ -135,13 +135,8 @@ static void procesar_mensaje_erlang(ClienteConectado *cliente, char* msg) {
         erlang_job_request(cliente, job_id, msg);
     else if (strcmp(comando, "JOB_RELEASE") == 0 && parseados == 2)
         erlang_job_release(job_id);
-    else {
-        if (job_id != -1) {
-            char msj[TAM_MSJ];
-            snprintf(msj, sizeof(msj), "JOB_DENIED %d\n", job_id);
-            enviar_mensaje_tcp(cliente->fd, msj);
-        }
-    }
+    else if (parseados >= 1)
+        printf("[CONTROLADOR] Mensaje Erlang no reconocido: %s\n", msg);
 }
 
 // Erlang pide la tabla de nodos conocidos del clúster.
@@ -322,9 +317,8 @@ static void procesar_mensaje_red_c(ClienteConectado *cliente, char* msg) {
         red_denied(job_id);
     else if (strcmp(comando, "RELEASE") == 0 && parseados == 4)
         red_release(cliente, job_id, recurso, cant_res);
-    else {
+    else
         printf("[CONTROLADOR] Mensaje C-C no reconocido: %s\n", msg);
-    }
 }
 
 // Otro agente nos pide reservar un recurso local para un job suyo.
