@@ -30,6 +30,7 @@ void registrar_asignacion(TablaJobs tabla_jobs, int job_id, int socket,
                             char* recurso, int cantidad) {
     struct jobActivo_ busqueda;
     busqueda.job_id = job_id;
+    busqueda.socket_origen = socket;
 
     // Buscamos si el trabajo ya nos debía algo antes
     JobActivo job = (JobActivo)tablahash_buscar(tabla_jobs->tabla, &busqueda);
@@ -54,10 +55,11 @@ void registrar_asignacion(TablaJobs tabla_jobs, int job_id, int socket,
     else if (strcmp(recurso, RECURSO_MEM) == 0) job->mem_usada += cantidad;
 }
 
-int registrar_liberacion(TablaJobs tabla_jobs, int job_id, char* recurso,
-                        int cantidad) {
+int registrar_liberacion(TablaJobs tabla_jobs, int job_id, int socket,
+                        char* recurso, int cantidad) {
     struct jobActivo_ busqueda;
     busqueda.job_id = job_id;
+    busqueda.socket_origen = socket;
 
     JobActivo job = (JobActivo)tablahash_buscar(tabla_jobs->tabla, &busqueda);
     if (job == NULL) return 0; // No existe el job

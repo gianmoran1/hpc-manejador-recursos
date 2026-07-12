@@ -47,8 +47,8 @@ void registrar_asignacion(TablaJobs tabla_jobs, int job_id, int socket,
  * de la tabla y de la lista. Devuelve 0 si job_id no existe en la tabla o
  * si recurso no es "cpu"/"gpu"/"mem".
  */
-int registrar_liberacion(TablaJobs tabla_jobs, int job_id, char* recurso,
-    int cantidad);
+int registrar_liberacion(TablaJobs tabla_jobs, int job_id, int socket,
+    char* recurso, int cantidad);
 
 /**
  * Libera todos los recursos de los jobs cuyo socket_origen sea socket_caido

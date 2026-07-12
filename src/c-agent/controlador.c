@@ -30,7 +30,7 @@ static void procesar_mensaje_red_c(ClienteConectado *cliente, char* msg);
 static void red_reserve(ClienteConectado *cliente, int job_id, char* recurso, int cant_res);
 static void red_granted(ClienteConectado *cliente, int job_id);
 static void red_denied(int job_id);
-static void red_release(int job_id, char* recurso, int cant_res);
+static void red_release(ClienteConectado *cliente, int job_id, char* recurso, int cant_res);
 static void notificar_timeout_peticion(PeticionMulti p);
 
 void controlador_anuncio_recibido(char* buffer_udp) {
@@ -314,7 +314,7 @@ static void procesar_mensaje_red_c(ClienteConectado *cliente, char* msg) {
     else if (strcmp(comando, "DENIED") == 0 && parseados >= 2)
         red_denied(job_id);
     else if (strcmp(comando, "RELEASE") == 0 && parseados == 4)
-        red_release(job_id, recurso, cant_res);
+        red_release(cliente, job_id, recurso, cant_res);
 }
 
 // Otro agente nos pide reservar un recurso local para un job suyo.
@@ -401,9 +401,9 @@ static void red_denied(int job_id) {
 }
 
 // Un nodo nos pide liberar un recurso local de un job (rollback o fin de trabajo).
-static void red_release(int job_id, char* recurso, int cant_res) {
+static void red_release(ClienteConectado *cliente, int job_id, char* recurso, int cant_res) {
     printf("[CONTROLADOR] RELEASE recibido para job %d: %s %d\n", job_id, recurso, cant_res);
-    gestor_manejar_release(estado, recurso, job_id, cant_res, callback_granted_red);
+    gestor_manejar_release(estado, recurso, job_id, cliente->fd, cant_res, callback_granted_red);
 }
 
 // Callback de timeout del lado coordinador: la PeticionMulti venció sin

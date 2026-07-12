@@ -14,7 +14,7 @@ static int nodo_comparar(Nodo a, Nodo b);
 static unsigned nodo_hash(Nodo a);
 static Nodo crear_nodo(char* ip, int puerto, int cpu, int gpu, int mem);
 static void agregar_nodo(Nodo nodo, TablaNodos tabla_nodos);
-static Nodo buscar_nodo_ptr(char* ip, int puerto, TablaNodos tabla_nodos);
+
 
 TablaNodos crear_tabla_nodos(){
     TablaNodos tabla_nodos = malloc(sizeof(struct tabla_nodos));
@@ -57,38 +57,25 @@ void nodos_procesar_anuncio(TablaNodos tabla_nodos, char* ip, int puerto, int cp
 
 void gestor_desconectar_nodos_timeout(TablaNodos tabla_nodos){
     GList temp = tabla_nodos->lista;
-    if (temp == NULL) return; // No hay nodos
-
-    time_t ahora = time(NULL);
-    time_t tiempo_nodo;
-
-    while (temp != NULL) {  // Hay nodos, elimina los que corresponda
-        tiempo_nodo = ((Nodo)temp->data)->ultimo_anuncio;
-
-        if (difftime(ahora, tiempo_nodo) >= TIEMPO_VIDA_NODO) {
-            GList next = temp->next;
-            tablahash_eliminar(tabla_nodos->tabla, temp->data);
-            free(temp);
-            temp = next;
-            tabla_nodos->lista = temp;
-        } else {
-            break;
-        }
-    }
-
     if (temp == NULL) return;
 
-    while (temp->next != NULL) {
-        tiempo_nodo = ((Nodo)temp->next->data)->ultimo_anuncio;
-        if (difftime(ahora, tiempo_nodo) >= TIEMPO_VIDA_NODO) {
-            GList next = temp->next->next;
-            tablahash_eliminar(tabla_nodos->tabla, temp->next->data);
-            free(temp->next);
-            temp->next = next;
+    time_t ahora = time(NULL);
 
+    GList prev = NULL;
+    while (temp != NULL) {
+        GList next = temp->next;
+        Nodo n = (Nodo)temp->data;
+        if (difftime(ahora, n->ultimo_anuncio) >= TIEMPO_VIDA_NODO) {
+            tablahash_eliminar(tabla_nodos->tabla, n);
+            free(temp);
+            if (prev == NULL)
+                tabla_nodos->lista = next;
+            else
+                prev->next = next;
         } else {
-            temp = temp->next;
+            prev = temp;
         }
+        temp = next;
     }
 }
 

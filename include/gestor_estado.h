@@ -31,7 +31,7 @@ int gestor_manejar_reserva(EstadoGlobal estado, char* nombre_recurso, int job_id
  * por cada pedido que pasa a concedido, para mandarle el GRANTED por TCP.
  */
 void gestor_manejar_release(EstadoGlobal estado, char* nombre_recurso, int job_id,
-    int cantidad, void (*avisar_red)(int, int));
+    int socket_origen, int cantidad, void (*avisar_red)(int, int));
 
 /*
  * Higiene de colas locales: desencola (en silencio) los RESERVE encolados que

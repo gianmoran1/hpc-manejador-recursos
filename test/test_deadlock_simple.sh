@@ -82,7 +82,7 @@ int main(void) {
 
     /* ── Paso 4: liberar Job 9000 y reintentar ── */
     printf("\n--- Paso 4: Job 9000 liberado, Job 1001 reintenta ---\n");
-    gestor_manejar_release(estado, "gpu", 9000, 1, cb_granted);
+    gestor_manejar_release(estado, "gpu", 9000, 20, 1, cb_granted);
     assert_true(estado->gpu->disponible == 1, "GPU libre tras release de Job 9000");
 
     r = gestor_manejar_reserva(estado, "gpu", 1001, 10, 1);
@@ -133,7 +133,7 @@ int main(void) {
                 "Nodo B: pedido de job 500 desencolado por timeout");
 
     /* Rollback: el agente recibe el DENIED/TIMEOUT y libera lo ya grantado en Nodo A */
-    gestor_manejar_release(nodo_a, "cpu", 500, 2, cb_granted);
+    gestor_manejar_release(nodo_a, "cpu", 500, 30, 2, cb_granted);
     assert_true(nodo_a->cpu->disponible == 4, "Rollback exitoso: Nodo A cpu vuelve a 4");
     assert_true(nodo_b->gpu->disponible == 0, "Nodo B: gpu sigue ocupada por job 8000");
 
@@ -165,7 +165,7 @@ int main(void) {
     /* ── Borde 4: release más de lo reservado no produce negativo ── */
     printf("\n--- Borde 4: release excede lo reservado ---\n");
     gestor_manejar_reserva(e, "cpu", 10, 5, 2); /* reserva 2 cpu */
-    gestor_manejar_release(e, "cpu", 10, 100, NULL); /* intenta liberar 100 */
+    gestor_manejar_release(e, "cpu", 10, 5, 100, NULL); /* intenta liberar 100 */
     assert_true(e->cpu->disponible == 4,
                 "release excesivo liberó solo lo reservado (cpu=4, sin negativo)");
 
@@ -184,7 +184,7 @@ int main(void) {
     assert_true(r22 == 0, "Job 22 (necesita 1) encola detrás de 21 (FIFO)");
     /* Liberar 1 cpu de job 20 → disponible pasa a 2, alcanza para job 21 */
     ultimo_granted_job = -1;
-    gestor_manejar_release(e, "cpu", 20, 1, cb_granted);
+    gestor_manejar_release(e, "cpu", 20, 5, 1, cb_granted);
     assert_true(ultimo_granted_job == 21,
                 "Con 2 cpu disponibles se sirvió job 21 (cabeza de cola)");
     assert_true(!cola_es_vacia(e->cpu->pendientes),
@@ -193,7 +193,7 @@ int main(void) {
     /* ── Borde 6: release de job inexistente es no-op ── */
     printf("\n--- Borde 6: release de job inexistente ---\n");
     int cpu_antes = e->cpu->disponible;
-    gestor_manejar_release(e, "cpu", 9999, 1, cb_granted); /* job 9999 nunca existió */
+    gestor_manejar_release(e, "cpu", 9999, 0, 1, cb_granted); /* job 9999 nunca existió */
     assert_true(e->cpu->disponible == cpu_antes,
                 "release de job inexistente no altera los recursos");
 
@@ -204,7 +204,7 @@ int main(void) {
     gestor_manejar_reserva(e2, "cpu", 77, 10, 3); /* mismo job, mismo recurso */
     assert_true(e2->cpu->disponible == 3,
                 "doble RESERVE acumula: 8-2-3=3 disponibles");
-    gestor_manejar_release(e2, "cpu", 77, 5, NULL); /* liberar todo lo acumulado */
+    gestor_manejar_release(e2, "cpu", 77, 10, 5, NULL); /* liberar todo lo acumulado */
     assert_true(e2->cpu->disponible == 8,
                 "release del total acumulado (cpu vuelve a 8)");
     estado_destruir(e2);

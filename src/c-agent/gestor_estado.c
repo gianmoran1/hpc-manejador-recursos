@@ -25,7 +25,7 @@ static void* no_copia_solicitud(void* dato);
 static void destruir_solicitud(void* dato);
 static RecursoLocal obtener_recurso(EstadoGlobal estado, char* nombre);
 static void manejar_release_aux(EstadoGlobal estado, char* nombre_recurso,
-    int job_id, int cantidad, void (*avisar_red)(int, int));
+    int job_id, int socket_origen, int cantidad, void (*avisar_red)(int, int));
 static void visitar_peticion_vencida(void *dato, void *extra);
 static void callback_tragedia(char* nombre_recurso, int cantidad);
 
@@ -72,9 +72,9 @@ int gestor_manejar_reserva(EstadoGlobal estado, char* nombre_recurso, int job_id
 }
 
 void gestor_manejar_release(EstadoGlobal estado, char* nombre_recurso, int job_id,
-                            int cantidad, void (*avisar_red)(int, int)) {
+                            int socket_origen, int cantidad, void (*avisar_red)(int, int)) {
     pthread_mutex_lock(&estado->lock);
-    manejar_release_aux(estado, nombre_recurso, job_id, cantidad, avisar_red);
+    manejar_release_aux(estado, nombre_recurso, job_id, socket_origen, cantidad, avisar_red);
     pthread_mutex_unlock(&estado->lock);
 }
 
@@ -212,13 +212,13 @@ static RecursoLocal obtener_recurso(EstadoGlobal estado, char* nombre) {
 // Núcleo del release (asume estado->lock tomado): devuelve lo liberado al
 // recurso y reparte a los que estaban encolados mientras alcance.
 static void manejar_release_aux(EstadoGlobal estado, char* nombre_recurso,
-                        int job_id, int cantidad, void (*avisar_red)(int, int)) {
+                        int job_id, int socket_origen, int cantidad, void (*avisar_red)(int, int)) {
     RecursoLocal rec = obtener_recurso(estado, nombre_recurso);
     if (!rec || cantidad <= 0) return;
 
     // Liberar solo lo que realmente tiene asignado en el libro contable
     int liberado = registrar_liberacion(estado->libro_contable, job_id,
-                                        nombre_recurso, cantidad);
+                                        socket_origen, nombre_recurso, cantidad);
     if (liberado == 0) return; // Nada que liberar
 
     // Devuelvo los recursos
