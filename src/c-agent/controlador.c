@@ -78,7 +78,7 @@ void controlador_anuncio_recursos() {
 void controlador_timer_deadlock_y_desconexion() {
     uint64_t _expiraciones;
     read(timer_timeout, &_expiraciones, sizeof(_expiraciones));
-    gestor_expirar_pedidos(estado);
+    gestor_expirar_pedidos(estado); // Recursos locales
     gestor_expirar_peticiones(estado, notificar_timeout_peticion);
     gestor_desconectar_nodos(estado);
 }
@@ -120,7 +120,6 @@ void callback_granted_red(int job_id, int socket_fd) {
 }
 
 // Despacho de mensajes de Erlang (conexión local).
-
 static void procesar_mensaje_erlang(ClienteConectado *cliente, char* msg) {
     char comando[TAM_CMD];
     int job_id = -1;
@@ -411,7 +410,7 @@ static void red_release(ClienteConectado *cliente, int job_id, char* recurso, in
 }
 
 // Callback de timeout del lado coordinador: la PeticionMulti venció sin
-// completarse. Manda RELEASE a todos sus nodos (rollback) y JOB_TIMEOUT a su
+// completarse. Manda RELEASE a todos sus nodos y JOB_TIMEOUT a su
 // Erlang para que reintente. Se invoca con estado->lock tomado (desde el gestor).
 static void notificar_timeout_peticion(PeticionMulti p) {
     for (int i = 0; i < p->total; i++) {

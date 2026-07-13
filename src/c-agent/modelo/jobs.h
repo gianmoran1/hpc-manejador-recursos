@@ -13,8 +13,8 @@ typedef struct jobActivo_ {
 } *JobActivo;
 
 typedef struct tablaJobs_ {
-    TablaHash tabla; 
-    GList lista;    
+    TablaHash tabla;
+    GList lista;
 } *TablaJobs;
 
 /**

@@ -14,6 +14,7 @@ typedef struct nodoReserva_ {
     int grantado;  /* 0 = pendiente, 1 = GRANTED recibido */
 } NodoReserva;
 
+// Pedidos para nuestro Erlang.
 typedef struct peticionMulti_ {
     int    job_id;
     int    socket_erlang;      /* fd de Erlang para JOB_GRANTED / JOB_DENIED / JOB_TIMEOUT */

@@ -187,12 +187,12 @@ static void servidor_desconectar_cliente(ClienteConectado *cliente) {
 
 static void servidor_gestion_cliente(ClienteConectado* cliente) {
     int ret = atender_cliente_tcp(cliente);
-    if (ret == 0) {                              // el socket se rompió o se cerró
+    if (ret == 0) { // el socket se rompió o se cerró
         servidor_desconectar_cliente(cliente);
     } else {
         printf("[CONEXIONES] Mensaje recibido de cliente (FD %d).\n", cliente->fd);
         controlador_mensaje_cliente(cliente);
-        servidor_rearmar_cliente(cliente);        // re-arma según haya salida pendiente
+        servidor_rearmar_cliente(cliente); // re-arma según haya salida pendiente
     }
 }
 
@@ -266,6 +266,9 @@ static void servidor_aceptar_cliente(int fd_listo) {
 
     ClienteConectado *clienteNuevo =
         crear_cliente_conectado(conn_sock, (fd_listo == lsock_local) ? 1 : 0);
+
+    // EPOLLONESHOT hace que se derpierte un solo hilo y lo desactiva
+    // hasta que se re-arme con EPOLL_CTL_MOD.
     servidor_agregar_cliente_en_epoll(clienteNuevo, EPOLLIN | EPOLLONESHOT);
 
     if (fd_listo == lsock_local)

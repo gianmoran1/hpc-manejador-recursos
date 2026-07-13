@@ -131,7 +131,8 @@ void nodo_registrar_conexion(char* ip, ClienteConectado* cliente, TablaNodos tab
 
 void nodo_limpiar_conexion_por_fd(int fd, TablaNodos tabla_nodos) {
     // Solo desvincula la conexión cacheada (conexion = NULL). NO elimina el nodo
-    // del registro (eso lo decide el timeout de 15s en desconectar()) ni libera
+    // del registro (eso lo decide el timeout de 15s en 
+    // gestor_desconectar_nodos_timeout()) ni libera
     // el ClienteConectado (lo hace el loop de epoll, su dueño).
     for (GList temp = tabla_nodos->lista; temp != NULL; temp = temp->next) {
         Nodo n = (Nodo)temp->data;
@@ -192,5 +193,3 @@ static void agregar_nodo(Nodo nodo, TablaNodos tabla_nodos){
     tabla_nodos->lista = glist_agregar_inicio(tabla_nodos->lista, nodo, (
                                                 FuncionCopia)nodo_no_copiar);
 }
-
-

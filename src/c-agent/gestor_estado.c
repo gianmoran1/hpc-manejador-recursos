@@ -112,7 +112,7 @@ void gestor_expirar_peticiones(EstadoGlobal estado, void (*cb_timeout)(PeticionM
     int cap = tablahash_nelems(estado->peticiones_pendientes);
     if (cap > 0) {
         // Recolectamos primero: no se puede eliminar durante el recorrido.
-        int *vencidos = malloc(cap * sizeof(int));
+        int *vencidos = malloc(cap * sizeof(int)); // Guarda job id.
         struct ctx_expira_peticion ctx = { time(NULL), vencidos, 0 };
         tablahash_recorrer(estado->peticiones_pendientes, visitar_peticion_vencida, &ctx);
 
@@ -121,7 +121,8 @@ void gestor_expirar_peticiones(EstadoGlobal estado, void (*cb_timeout)(PeticionM
             busq.job_id = vencidos[i];
             PeticionMulti p = tablahash_buscar(estado->peticiones_pendientes, &busq);
             if (p) {
-                if (cb_timeout) cb_timeout(p);   // RELEASE a los nodos + JOB_TIMEOUT
+                if (cb_timeout) 
+                    cb_timeout(p);   // RELEASE a los nodos + JOB_TIMEOUT
                 tablahash_eliminar(estado->peticiones_pendientes, &busq);
             }
         }
@@ -270,8 +271,10 @@ static void callback_tragedia(char* nombre_recurso, int cantidad) {
             rec->disponible -= solicitud->cantidad_pedida;
             registrar_asignacion(estado_actual->libro_contable, solicitud->job_id,
                 solicitud->socket_origen, nombre_recurso, solicitud->cantidad_pedida);
+
             if (aviso_red_actual) aviso_red_actual(solicitud->job_id,
                                                     solicitud->socket_origen);
+            
             rec->pendientes = cola_desencolar(rec->pendientes, destruir_solicitud);
         } else {
             break;
